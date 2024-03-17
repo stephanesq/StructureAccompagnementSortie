@@ -70,3 +70,5 @@ Donnees/*
 Documentation/*
 
 
+*.msg
+.DS_Store
