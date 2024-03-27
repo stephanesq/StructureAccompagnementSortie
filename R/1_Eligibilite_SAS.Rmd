@@ -22,16 +22,16 @@ output: html_notebook
 
 ```{r librairies, include = FALSE}
 # Import des librairies nécessaires 
-library(arrow)
-library(tidyverse)
-library(readxl)
-library(lubridate)
-library(stringi)
-library(fuzzyjoin)
-library(writexl) 
-library(haven)
-library(tidylog)
-options(tidylog.message.colors = "green")
+# library(arrow)
+# library(tidyverse)
+# library(readxl)
+# library(lubridate)
+# library(stringi)
+# library(fuzzyjoin)
+# library(writexl) 
+# library(haven)
+pacman::p_load(tidyverse, arrow, data.table, janitor, haven)
+
 ```
 
 #0. Import des bases LSC + ref
@@ -40,9 +40,8 @@ options(tidylog.message.colors = "green")
 
 ```{r, warning=FALSE}
 path = paste0(here::here(),"/Donnees/")
-path_dwh = paste0(here::here(),"/Donnees/DWH/")
-path_ref = paste0(here::here(),"/Donnees/Referentiel/")
-
+path_dwh = "~/Documents/Recherche/3_Evaluation/_DATA/INFPENIT/"
+path_ref = "~/Documents/Recherche/3_Evaluation/_DATA/Referentiel/"
 ```
 
 ###0.2 Base de travail
@@ -55,29 +54,25 @@ Réflexions :
 - Mais utilisation IP sans filtre source = pb -> 6 x plus de lignes
 
 ```{r}
-T_DWH_H_SITU_PENALE <- read_parquet(paste0(path_dwh,"t_dwh_h_situ_penale.parquet"))
+# Établir la connexion aux données
+t_dwh_h_situ_penale <- open_dataset(paste0(path_dwh,"t_dwh_h_situ_penale.parquet"))
 
-gc()
-
-T_DWH_H_SITU_PENALE <- T_DWH_H_SITU_PENALE %>% 
-  filter(TP_SOURCE == "GENESIS") %>% 
+t_dwh_h_situ_penale <- t_dwh_h_situ_penale |>
+  # Définir la requête
+  filter(TP_SOURCE == "GENESIS") |>
   select(NM_ECROU_INIT, DT_DEBUT_SITU_PENALE, DT_FIN_SITU_PENALE, 
          CD_CP_GLOBALE, CD_CP_GLO_MAN, CD_CP_DETAIL, DT_LIBE_PREV, 
-         QTM_FERME_TACC_A, QTM_FERME_TACC_M, QTM_FERME_TACC_S, QTM_FERME_TACC_J) %>% 
-  mutate_at(vars(starts_with("DT_")), as.Date) %>% 
-  mutate_at(vars(starts_with("QTM_")), as.numeric) %>% 
-  filter(!is.na(DT_LIBE_PREV))
+         QTM_FERME_TACC_A, QTM_FERME_TACC_M, QTM_FERME_TACC_S, QTM_FERME_TACC_J) |>
+  filter(!is.na(DT_LIBE_PREV))  |>  #sinon inutile
+# Récupérer le résultat sous forme d'un data.frame
+  collect()
 
-# T_DWH_H_SITU_PENALE_2 <- read_parquet(paste0(path_dwh,"t_dwh_h_situ_penale.parquet"))
-# info_libprev <- T_DWH_H_SITU_PENALE_2 %>%  
-#   select(NM_ECROU_INIT,DT_DEBUT_SITU_PENALE,DT_LIBE_PREV, TP_SOURCE) %>% 
-#   mutate(ANNEE = year(DT_DEBUT_SITU_PENALE),
-#          INDIC_LIBPREV = if_else(is.na(DT_LIBE_PREV),0,1)) %>% 
-#   arrange(NM_ECROU_INIT,DT_DEBUT_SITU_PENALE)
-# 
-# table(info_libprev$ANNEE,info_libprev$INDIC_LIBPREV, useNA = "ifany")
+# changement des formats
+t_dwh_h_situ_penale <- t_dwh_h_situ_penale |>
+  mutate_at(vars(starts_with("DT_")), as.Date) |>
+  mutate_at(vars(starts_with("QTM_")), as.numeric)
 
-gc()
+# gc()
 ```
 
 ##### Date écrou initial
@@ -125,7 +120,7 @@ Pour les LC : Date de levée d'écrou LC +1
 
 ```{r}
 
-T_DWH_H_SITU_PENALE_copie <- T_DWH_H_SITU_PENALE %>% 
+t_dwh_h_situ_penale_copie <- t_dwh_h_situ_penale %>% 
   left_join(T_DWH_F_MOUVEMENT) %>% 
   mutate(
     DT_FIN_SITU_PENALE = case_when(
@@ -136,7 +131,7 @@ T_DWH_H_SITU_PENALE_copie <- T_DWH_H_SITU_PENALE %>%
   filter(DT_DEBUT_SITU_PENALE <= DT_FIN_SITU_PENALE)  
 
 
-# T_DWH_H_SITU_PENALE_copie <- T_DWH_H_SITU_PENALE_copie %>%
+# t_dwh_h_situ_penale_copie <- t_dwh_h_situ_penale_copie %>%
 #   mutate(
 #     DT_FIN_SITU_PENALE2 = case_when(
 #     is.na(DT_LEVEECR)|DT_FIN_SITU_PENALE<DT_LEVEECR ~ DT_FIN_SITU_PENALE,
@@ -151,7 +146,7 @@ gc()
 
 ```{r}
 # Conserver lignes avec Eligibilité LSC (hors AP)
-T_DWH_H_SITU_PENALE <- T_DWH_H_SITU_PENALE_copie %>% 
+t_dwh_h_situ_penale <- t_dwh_h_situ_penale_copie %>% 
   # Date écrou initial
   left_join(T_DWH_ECROU_INIT)
 
@@ -179,7 +174,7 @@ rm(T_DWH_ECROU_INIT)
  - ATTENTION sur 2/3 peine, il faut prendre la valeur entière, sinon il y a des décimales cachées ...
 
 ```{r}
-T_DWH_H_SITU_PENALE <- T_DWH_H_SITU_PENALE%>% 
+t_dwh_h_situ_penale <- t_dwh_h_situ_penale%>% 
   # Quantum ferme
   mutate(QTM_FERME_TACC = QTM_FERME_TACC_A * 360 + QTM_FERME_TACC_M *30 + QTM_FERME_TACC_S *7 + QTM_FERME_TACC_J) %>% 
   select(-QTM_FERME_TACC_A, -QTM_FERME_TACC_M, -QTM_FERME_TACC_S, -QTM_FERME_TACC_J) %>% 
@@ -193,7 +188,7 @@ T_DWH_H_SITU_PENALE <- T_DWH_H_SITU_PENALE%>%
   select(-CD_CP_GLOBALE, -CD_CP_GLO_MAN, -CD_CP_DETAIL)
 
 # Conserver lignes avec Eligibilité LSC (hors AP)
-T_DWH_H_SITU_PENALE <- T_DWH_H_SITU_PENALE %>% 
+t_dwh_h_situ_penale <- t_dwh_h_situ_penale %>% 
   # Personnes condamnées avec date de libé prev
   filter(CD_CP_REDR != 'PR' & !is.na(DT_LIBE_PREV))  %>% 
   # Calcul 2/3 de peine
@@ -205,7 +200,7 @@ T_DWH_H_SITU_PENALE <- T_DWH_H_SITU_PENALE %>%
   filter(ELIGIBLE_LSC==1) 
 
 # Réduire le nombre de lignes
-T_DWH_H_SITU_PENALE <- T_DWH_H_SITU_PENALE %>% 
+t_dwh_h_situ_penale <- t_dwh_h_situ_penale %>% 
   # on récupère les dates de libe prev précedentes (voir si changement)
   ## si pas de changement
   ## si fin situ pénal = début celle précédente
@@ -222,7 +217,7 @@ T_DWH_H_SITU_PENALE <- T_DWH_H_SITU_PENALE %>%
   select(-CD_CP_REDR,-ELIGIBLE,-DT_LIBE_PREV_PREV,-DT_FIN_PREV,-MM_SITU,-MODIF_DT_LIBE)
 
 #Conserver que les lignes utiles
-T_DWH_H_SITU_PENALE <- T_DWH_H_SITU_PENALE %>% 
+t_dwh_h_situ_penale <- t_dwh_h_situ_penale %>% 
   #garde qu'une ligne par enchaînement de situ pénit AP
   group_by(NM_ECROU_INIT,ID_MODIF_DT_LIBE) %>% 
   mutate(DT_FIN_SITU_PENALE = max(DT_FIN_SITU_PENALE)) %>% 
@@ -234,7 +229,7 @@ T_DWH_H_SITU_PENALE <- T_DWH_H_SITU_PENALE %>%
 
 
 # Eligible
-ELIG_situ_penale <- T_DWH_H_SITU_PENALE %>% 
+ELIG_situ_penale <- t_dwh_h_situ_penale %>% 
   select(NM_ECROU_INIT,DT_DEBUT_SITU_PENALE,DT_DEUXTIERSDEPEINE,DT_FIN_SITU_PENALE, DT_LIBE_PREV, LEVEECR_LC,DT_LEVEECR) %>% 
   mutate(DT_DEBUT_DEUXTIERS = if_else(DT_DEUXTIERSDEPEINE <= DT_DEBUT_SITU_PENALE, DT_DEBUT_SITU_PENALE, DT_DEUXTIERSDEPEINE),
          DBT_AVANT = if_else(DT_DEUXTIERSDEPEINE <= DT_DEBUT_SITU_PENALE, 1,0)) %>% 
@@ -245,7 +240,7 @@ ELIG_situ_penale <- T_DWH_H_SITU_PENALE %>%
 # Ecrous éligible
 ECROU_ELIG <- ELIG_situ_penale %>% select(NM_ECROU_INIT) %>% distinct()
 
-#rm(T_DWH_H_SITU_PENALE)
+#rm(t_dwh_h_situ_penale)
 ```
 
 ##### Simplification des lignes
@@ -766,7 +761,7 @@ psych::describeBy(LSC_ssELIG$ERREUR_LSC, LSC_ssELIG$DECISIONAP_RED)
 
 
 LSC_ssELIG_penal <- LSC_ssELIG %>% 
-  inner_join(T_DWH_H_SITU_PENALE_copie) %>% 
+  inner_join(t_dwh_h_situ_penale_copie) %>% 
   arrange(NM_ECROU_INIT,DT_DEBUT_SITU_PENALE)
 
 LSC_ssELIG_penit <- LSC_ssELIG %>% 
