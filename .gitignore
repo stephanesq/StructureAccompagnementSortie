@@ -72,3 +72,4 @@ Documentation/*
 
 *.msg
 .DS_Store
+*.xls
