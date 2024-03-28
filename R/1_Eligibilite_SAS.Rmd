@@ -22,14 +22,11 @@ output: html_notebook
 
 ```{r librairies, include = FALSE}
 # Import des librairies nécessaires 
-# library(arrow)
-# library(tidyverse)
 # library(readxl)
 # library(lubridate)
 # library(stringi)
 # library(fuzzyjoin)
 # library(writexl) 
-# library(haven)
 pacman::p_load(tidyverse, arrow, data.table, janitor, haven)
 
 ```
@@ -59,6 +56,7 @@ t_dwh_h_situ_penale <- open_dataset(paste0(path_dwh,"t_dwh_h_situ_penale.parquet
 
 t_dwh_h_situ_penale <- t_dwh_h_situ_penale |>
   # Définir la requête
+  # Filtre et selection
   filter(TP_SOURCE == "GENESIS") |>
   select(NM_ECROU_INIT, DT_DEBUT_SITU_PENALE, DT_FIN_SITU_PENALE, 
          CD_CP_GLOBALE, CD_CP_GLO_MAN, CD_CP_DETAIL, DT_LIBE_PREV, 
@@ -72,16 +70,31 @@ t_dwh_h_situ_penale <- t_dwh_h_situ_penale |>
   mutate_at(vars(starts_with("DT_")), as.Date) |>
   mutate_at(vars(starts_with("QTM_")), as.numeric)
 
+#modif quantum + date situ penale
+t_dwh_h_situ_penale <- t_dwh_h_situ_penale |>
+  # Quantum ferme
+  mutate(QTM_FERME_TACC = QTM_FERME_TACC_A * 360 + QTM_FERME_TACC_M *30 + QTM_FERME_TACC_S *7 + QTM_FERME_TACC_J) |>
+  select(-QTM_FERME_TACC_A, -QTM_FERME_TACC_M, -QTM_FERME_TACC_S, -QTM_FERME_TACC_J)|>
+  #garder date fin en date début
+  arrange(NM_ECROU_INIT, DT_DEBUT_SITU_PENALE) |>
+  group_by(NM_ECROU_INIT) |>
+  mutate(DT_SITU_PENALE = lag(DT_FIN_SITU_PENALE, default = first(DT_DEBUT_SITU_PENALE, na.rm = TRUE))) |>
+  ungroup() |>
+    # on enlève les dates inutiles
+    select(-DT_FIN_SITU_PENALE,-DT_DEBUT_SITU_PENALE)
 # gc()
 ```
 
 ##### Date écrou initial
 
 ```{r}
-T_DWH_ECROU_INIT <- read_parquet(paste0(path_dwh,"t_dwh_ecrou_init.parquet")) 
+t_dwh_ecrou_init <- open_dataset(paste0(path_dwh,"t_dwh_ecrou_init.parquet"))
 
-T_DWH_ECROU_INIT <- T_DWH_ECROU_INIT %>% 
-  select(NM_ECROU_INIT, DT_ECROU_INITIAL) %>% 
+t_dwh_ecrou_init <- t_dwh_ecrou_init |>
+  select(NM_ECROU_INIT, DT_ECROU_INITIAL) |>
+  collect()
+
+t_dwh_ecrou_init <- t_dwh_ecrou_init %>% 
   mutate(DT_ECROU_INITIAL=as.Date(DT_ECROU_INITIAL)) %>% 
     distinct() 
 
@@ -91,12 +104,15 @@ T_DWH_ECROU_INIT <- T_DWH_ECROU_INIT %>%
 
 ```{r}
 
-T_DWH_F_MOUVEMENT <- read_parquet(paste0(path_dwh,"t_dwh_f_mouvement.parquet"))
+t_dwh_f_mouvement <- read_parquet(paste0(path_dwh,"t_dwh_f_mouvement.parquet"))
 
-T_DWH_F_MOUVEMENT <- T_DWH_F_MOUVEMENT %>%
-  filter(TP_SOURCE ==  "GENESIS") %>%
-  filter(CD_TYPE_MOUVEMENT == "LIB" & CD_NATURE_MOUVEMENT == "LEVECR") %>%
-  select(NM_ECROU_INIT, DT_MOUVEMENT_REEL,CD_MOTIF_MOUVEMENT) %>%
+t_dwh_f_mouvement <- t_dwh_f_mouvement|>
+  filter(TP_SOURCE ==  "GENESIS") |>
+  filter(CD_TYPE_MOUVEMENT == "LIB" & CD_NATURE_MOUVEMENT == "LEVECR") |>
+  select(NM_ECROU_INIT, DT_MOUVEMENT_REEL,CD_MOTIF_MOUVEMENT) |>
+  collect()
+
+t_dwh_f_mouvement <- t_dwh_f_mouvement %>% 
   group_by(NM_ECROU_INIT) %>%
   mutate(DT_LEVEECR = max(DT_MOUVEMENT_REEL)) %>%
   ungroup()  %>% 
@@ -121,7 +137,7 @@ Pour les LC : Date de levée d'écrou LC +1
 ```{r}
 
 t_dwh_h_situ_penale_copie <- t_dwh_h_situ_penale %>% 
-  left_join(T_DWH_F_MOUVEMENT) %>% 
+  left_join(t_dwh_f_mouvement) %>% 
   mutate(
     DT_FIN_SITU_PENALE = case_when(
     is.na(DT_LEVEECR) ~ DT_FIN_SITU_PENALE,
@@ -138,7 +154,7 @@ t_dwh_h_situ_penale_copie <- t_dwh_h_situ_penale %>%
 #     LEVEECR_LC==1  ~ DT_LEVEECR+1,
 #     TRUE ~  DT_LEVEECR))
 
-rm(T_DWH_F_MOUVEMENT)
+rm(t_dwh_f_mouvement)
 gc()
 ```
 
@@ -148,9 +164,9 @@ gc()
 # Conserver lignes avec Eligibilité LSC (hors AP)
 t_dwh_h_situ_penale <- t_dwh_h_situ_penale_copie %>% 
   # Date écrou initial
-  left_join(T_DWH_ECROU_INIT)
+  left_join(t_dwh_ecrou_init)
 
-rm(T_DWH_ECROU_INIT)
+rm(t_dwh_ecrou_init)
 ```
 
 
@@ -175,9 +191,7 @@ rm(T_DWH_ECROU_INIT)
 
 ```{r}
 t_dwh_h_situ_penale <- t_dwh_h_situ_penale%>% 
-  # Quantum ferme
-  mutate(QTM_FERME_TACC = QTM_FERME_TACC_A * 360 + QTM_FERME_TACC_M *30 + QTM_FERME_TACC_S *7 + QTM_FERME_TACC_J) %>% 
-  select(-QTM_FERME_TACC_A, -QTM_FERME_TACC_M, -QTM_FERME_TACC_S, -QTM_FERME_TACC_J) %>% 
+
   # Redressement catégorie pénale
 # /!\ par rapport aux règles de gestion je n'ai pris que la première partie qui ne travaille que sur situ_penale et pas la partie sur la table mouvement parce que ça récupère toutes mes lignes sauf 3 que je mets en "CO" 
   mutate(CD_CP_REDR = as.factor(case_when(	
@@ -403,9 +417,9 @@ rm(situ_penit_propre)
 
 
 ```{r}
-T_DWH_ECROU_INIT <- read_parquet(paste0(path_dwh,"t_dwh_ecrou_init.parquet")) 
+t_dwh_ecrou_init <- read_parquet(paste0(path_dwh,"t_dwh_ecrou_init.parquet")) 
 
-T_DWH_ECROU_INIT <- T_DWH_ECROU_INIT %>% 
+t_dwh_ecrou_init <- t_dwh_ecrou_init %>% 
   select(NM_ECROU_INIT, DT_ECROU_INITIAL) %>% 
   mutate(DT_ECROU_INITIAL=as.Date(DT_ECROU_INITIAL)) %>% 
     distinct() 
@@ -417,10 +431,10 @@ situ_penit_ddbl <- situ_penit_ddbl %>%
   ungroup() %>% 
   
   #Date ecrou initial et ab initio
-  left_join(T_DWH_ECROU_INIT) %>% 
+  left_join(t_dwh_ecrou_init) %>% 
   mutate(INDIC_ABINITIO = if_else(time_length(difftime(DT_FIRST_AP,DT_ECROU_INITIAL), "days") <= 7, 1, 0)) 
 
-rm(T_DWH_ECROU_INIT)  
+rm(t_dwh_ecrou_init)  
 ```
 
 ##### Export intermédiaire
@@ -679,7 +693,7 @@ bind_rows(
            DUREE_ELIGIBILITE_TOTAL = NA) %>% 
     select(NM_ECROU_INIT,DT_DEUXTIERSDEPEINE,TYPE,DT_DEBUT_AP)
           ) %>%
-  left_join(T_DWH_ECROU_INIT) %>% 
+  left_join(t_dwh_ecrou_init) %>% 
   mutate(INDIC_ABINITIO = if_else(time_length(difftime(DT_DEBUT_AP,DT_ECROU_INITIAL), "days") <= 7, 1, 0)) %>% 
   select(-DT_ECROU_INITIAL, -DT_DEBUT_AP)
 ```
