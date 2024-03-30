@@ -24,7 +24,7 @@ dt_max_long <- format(dt_max, "%d %B %Y")
 path_infpenit <- "~/Documents/Recherche/3_Evaluation/_DATA/INFPENIT"
 path_referentiel <- "~/Documents/Recherche/3_Evaluation/_DATA/Referentiel"
 
-memory.limit(size = 18000)
+# memory.limit(size = 18000)
 
 # liste des établissements ouverts (ref_etab) ----
 ref_etab <- read_sas(paste0(path_referentiel, "ref_etab.sas7bdat")) %>% 
