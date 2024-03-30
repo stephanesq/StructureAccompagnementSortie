@@ -30,7 +30,7 @@ nationale, associations…) et le maintien des liens sociaux et familiaux.
 En facilitant ainsi la réinsertion des personnes détenues, les SAS sont
 un moyen efficace de lutter contre la récidive.
 
-## Retour de [l'OIP](https://oip.org/analyse/structures-daccompagnement-vers-la-sortie-de-la-theorie-aux-pratiques/) 
+## Retour de [l'OIP](https://oip.org/analyse/structures-daccompagnement-vers-la-sortie-de-la-theorie-aux-pratiques/)
 
 # Questions
 
