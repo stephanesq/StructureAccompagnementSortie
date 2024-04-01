@@ -191,7 +191,16 @@ eligible_ap <- h_situ_penale[, group := cumsum(ELIGIBLE_AP==0)]
 ## rleid() crée un identifiant unique pour chaque groupe distinct par ID
 eligible_ap[, group := rleid(group), by=NM_ECROU_INIT]
 ## supprime
-
+eligible_ap <-eligible_ap[ELIGIBLE_AP==1,]
+## Dates début et fin
+### 
+eligible_ap <- eligible_ap[order(NM_ECROU_INIT, DT_SITU_PENALE, group)]
+setkeyv(eligible_ap,c("NM_ECROU_INIT","group"))
+### 
+eligible_ap[, `:=`(
+  DT_DBT_ELIG = first(DT_SITU_PENALE),
+  DT_FIN_ELIG = last(DT_NEXT_SITU_PENALE))
+            , by=.(NM_ECROU_INIT,group)]
 
 
   
