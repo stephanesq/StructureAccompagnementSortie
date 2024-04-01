@@ -1,22 +1,33 @@
 # Outputs
-# - Liste des éligibles à la LSC à la date de leur première éligibilité
-# - Liste des écroués en AP au moment des 2/3 de leur peine et éligibles à la LSC s'ils ne bénéficiaient pas déjà d'une AP
-
+# OBJECTIFS
+#   - Déterminer quand éligible à un aménagement
+#   - + éligibile à une LSC et LSC-D
+#   
 # ORGANISATION
-# - Informations sur :
+# - Rajouter informations sur :
 #   - Date écrou initial
-# - Date de libération + motif si LC
+#   - Date de libération + motif si LC
 # 
-# - Situ pénale
-# - Conserver que 
-# - situ pénale avant libération OU si LC avant date de libération prévisionnelle
+# - Modifier situ pénale
+#   - Conserver que CON ou CP
+#   - situ pénale avant libération OU si LC avant date de libération prévisionnelle
+#   - Renormalisation : une date de situation plutôt que date de début = date de fin  + 1
+#   
+# - Eligibilite 
+#   - Rappel des critères
+#     1. AP : <5 ans total et <2 ans avant la fin prev
+#     2. LSC : <5 ans total et <1/3 avant la fin prev
+#     3. LSC-D : <2 ans total et <3 mois avant la fin prev
+#   - Traitement dans les données
+#     1. AP :  eligib < date situ pénale suivante OU date libération prév
+#   
 # - On fait un premier traitement pour déterminer les périodes pendant lesquelles la personne est éligible à la LSC en fonction du QTM, de la catégorie pénale et des 2/3 de la date de libération prev
 # - On réunit ces périodes, peu importe la date des 2/3 elle-même
 
 
 # paramètres ---------
 # packages ----
-pacman::p_load(tidyverse, arrow, data.table, janitor, haven, styler)
+pacman::p_load(tidyverse, arrow, data.table, janitor, haven, styler,data.table)
 # chemin ------
 path = paste0(here::here(),"/Donnees/")
 path_dwh = "~/Documents/Recherche/3_Evaluation/_DATA/INFPENIT/"
@@ -26,7 +37,6 @@ path_ref = "~/Documents/Recherche/3_Evaluation/_DATA/Referentiel/"
 ## 1.1. Situ pénale ------
 
 # Traitement :
-#   - Renormalisation : une date de situation plutôt que date de début = date de fin  + 1
 #   - Date de libération prévisionnelle 
 #     - Problème de déperdition info date de lib prévisionnelle avant 2016
 #     - Que si date de libération prévisionnelle DISPO et si < DT_DEBUT_SITU_PENALE -> mais que après renormalisation (sinon des lignes ne veulent plus rien dire)
@@ -114,36 +124,74 @@ gc()
 
 #2. Croiser information  ----
 
-##2.1 Levée écrou et LC
-# Pour les LC : Date de levée d'écrou LC +1 
-# - Redressement plus simple qu'un travail selon la date de situation pénale
-# - et on fait durer les LC jusqu'au lendemain du mouvement (j'imagine que selon les JAP ou les établissements, ils considèrent que la mesure devient effective le lendemain ?)
-# - un certain nombre de cas concernés
-# - 
-
+##2.1 Levée écrou et LC --------------
 h_situ_penale <- t_dwh_h_situ_penale %>% 
   left_join(t_dwh_f_mouvement) 
-# %>% 
-#   mutate(
-#     DT_FIN_SITU_PENALE = case_when(
-#       is.na(DT_LEVEECR) ~ DT_FIN_SITU_PENALE,
-#       DT_FIN_SITU_PENALE < DT_LEVEECR ~ DT_FIN_SITU_PENALE,
-#       LEVEECR_LC==1  ~ DT_LEVEECR+1,
-#       TRUE ~  DT_LEVEECR)) %>% 
-#   filter(DT_DEBUT_SITU_PENALE <= DT_FIN_SITU_PENALE)  
 
+rm(t_dwh_f_mouvement)
 
-# test <- t_dwh_h_situ_penale_copie %>% 
-#   mutate(
-#     situ_post_lib_prev = if_else(DT_SITU_PENALE>DT_LIBE_PREV,1, 0),
-#     situ_post_lib = if_else(DT_SITU_PENALE>DT_LEVEECR,1, 0))
-# 
-# rm(t_dwh_f_mouvement)
+##2.2. Ecrou init / Elibilite LSC --------------
+# Passage en data.table
+# eligibilité en comparant date de mise à l'écrou et date de lib prev
+h_situ_penale <- data.table(h_situ_penale)
+t_dwh_ecrou_init <- data.table(t_dwh_ecrou_init)
 
-##2.2. Ecrou init
+# Indexer les tables
+# set the ON clause as keys of the tables:
+setkey(h_situ_penale,NM_ECROU_INIT)
+setkey(t_dwh_ecrou_init,NM_ECROU_INIT)
 
-h_situ_penale <- h_situ_penale %>% 
-  # Date écrou initial
-  left_join(t_dwh_ecrou_init)
+# Inner join avec date écrou initial nomatch=0 -> autre possibilité merge() de data.table
+h_situ_penale <- h_situ_penale[t_dwh_ecrou_init, nomatch = 0]
+
+# Calcul 2/3 de peine
+h_situ_penale[, `:=`(
+  DT_DEUXTIERSDEPEINE = floor_date(
+    time_length(difftime(DT_LIBE_PREV, DT_ECROU_INITIAL), "days") * 2/3 + DT_ECROU_INITIAL,
+    unit = "day"
+  ),
+  DT_DEUX_ANS_AVT = DT_LIBE_PREV - years(2),
+  DT_TROIS_MOIS_AVT = DT_LIBE_PREV - months(3)
+)]
+
+# Récupére prochaine situ pénale (shift) ou date lib prev si absente (fcoalesce)
+h_situ_penale <- h_situ_penale[order(NM_ECROU_INIT, DT_SITU_PENALE)]
+h_situ_penale[, `:=`(
+  DT_NEXT_SITU_PENALE = fcoalesce(
+    shift(DT_SITU_PENALE, type = "lead"),
+    DT_LIBE_PREV)
+  ), by = NM_ECROU_INIT]
+
+# calcul éligibilité
+h_situ_penale[, `:=`(
+    ELIGIBLE_AP = fifelse(
+      QTM_FERME_TACC > 0 &
+        QTM_FERME_TACC/360 <= 5 & 
+        DT_DEUX_ANS_AVT <= DT_NEXT_SITU_PENALE
+    , 1L, 0L),
+  ELIGIBLE_LSC = fifelse(
+    QTM_FERME_TACC > 0 &
+      QTM_FERME_TACC/360 <= 5 & 
+      DT_DEUX_ANS_AVT <= DT_NEXT_SITU_PENALE
+    , 1L, 0L),
+  ELIGIBLE_LSCD = fifelse(
+    QTM_FERME_TACC > 0 &
+      QTM_FERME_TACC/360 <= 2 & 
+      DT_TROIS_MOIS_AVT <= DT_NEXT_SITU_PENALE ,1L, 0L) #les parties 1L et 0L correspondent à des entiers littéraux en R, pour éviter que R croit à des décimaux ou autres
+  )]
+#Supprimer dates de calcul
 
 rm(t_dwh_ecrou_init)
+
+#3. Eligibilité AP/LSC/LSC-D ---------
+##3.1. Période d'éligibilité à un aménagement de peine -------
+# Créer une colonne pour les groupes consécutifs de ELIG == 1
+## cumsum(ELIG==0) crée un groupe cumulatif (1, 1, 2, 2, 2, 2, 1, 2, 2, 2, 2) basé sur les indices où ELIG est égal à 0
+eligible_ap <- h_situ_penale[, group := cumsum(ELIGIBLE_AP==0)]
+## rleid() crée un identifiant unique pour chaque groupe distinct par ID
+eligible_ap[, group := rleid(group), by=NM_ECROU_INIT]
+## supprime
+
+
+
+  
