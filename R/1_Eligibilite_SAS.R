@@ -251,3 +251,76 @@ eligible_ap <- eligible_ap[DT_FIN_ELIG < DT_SITU_PENALE_MAX &
                            , ]
 ## Export
 write_parquet(eligible_ap,paste0(path,"Export/eligible_ap.parquet"))
+
+# 4. Aménagement de peine ----
+### AP dans situ pénit
+### On réduit aux NM_ECROU_INIT pertinents
+### TOP_ECROUE ==1 : supprime les intervalles avec une libération (TOP_SORTIE_DEF ==0) et plus généralement les pas utiles 
+
+## 4.1 Import -----
+t_dwh_h_situ_penit <- open_dataset(paste0(path_dwh,"t_dwh_h_situ_penit.parquet")) |> 
+  filter(TOP_ECROUE ==1) |>  
+  select(NM_ECROU_INIT,
+       DT_DEBUT_SITU_PENIT,DT_FIN_SITU_PENIT,
+       CD_MOTIF_HEBERGEMENT,TOP_HEBERGE,CD_STATUT_SEMI_LIBERTE, CD_CATEG_ADMIN,
+       TOP_LSC, CD_TYPE_AMENAGEMENT, CD_AMENAGEMENT_PEINE, 
+       DT_DEBUT_EXEC,DT_SUSPSL) |>
+  # Redressement aménagement de peine
+  mutate(top_detention = if_else(CD_MOTIF_HEBERGEMENT %in% c('PE','PSEM','PSE','SEFIP','DDSE'),0,1),    
+         AMENAGEMENT = case_when(
+           top_detention==0 & CD_MOTIF_HEBERGEMENT %in% c('PSE', 'PSEM', 'SEFIP') ~ "DDSE", #PSE
+           top_detention==0 & CD_MOTIF_HEBERGEMENT == 'DDSE'  ~ "DDSE",
+           top_detention==0 & CD_MOTIF_HEBERGEMENT == "PE" ~ "PE_nheb",
+           top_detention==0 & CD_TYPE_AMENAGEMENT %in% c('PSE', 'PSEM', 'SEFIP') ~ "DDSE", #PSE
+           top_detention==0 & CD_TYPE_AMENAGEMENT == 'DDSE' ~ "DDSE",
+           top_detention==0 & CD_TYPE_AMENAGEMENT == 'PE' ~ "PE_nheb",
+           top_detention==1 & CD_AMENAGEMENT_PEINE == "PE" ~ "PE_heb",
+           top_detention==1 & CD_AMENAGEMENT_PEINE == "SL" & (CD_STATUT_SEMI_LIBERTE == "O" | str_detect(CD_CATEG_ADMIN, "SL")) ~ "SL",
+           top_detention==1 & CD_TYPE_AMENAGEMENT == "SL" & (CD_STATUT_SEMI_LIBERTE == "O" | str_detect(CD_CATEG_ADMIN, "SL")) ~ "SL"
+         )) %>% 
+  filter(!is.na(AMENAGEMENT)) |> 
+  collect() 
+# table(T_DWH_H_SITU_PENIT$TOP_ECROUE,T_DWH_H_SITU_PENIT$TOP_SORTIE_DEF)
+
+situ_penit <- ECROU_ELIG %>% 
+  left_join(T_DWH_H_SITU_PENIT %>% 
+              select(NM_ECROU_INIT,DT_DEBUT_SITU_PENIT,DT_FIN_SITU_PENIT,CD_MOTIF_HEBERGEMENT,TOP_HEBERGE,TOP_LSC, CD_TYPE_AMENAGEMENT, CD_AMENAGEMENT_PEINE, DT_DEBUT_EXEC,DT_SUSPSL,CD_STATUT_SEMI_LIBERTE, CD_CATEG_ADMIN)
+  ) %>% 
+  distinct() 
+
+rm(T_DWH_H_SITU_PENIT)
+rm(ECROU_ELIG)
+
+#Récupérer l'aménagement HORS LSC
+
+situ_penit_propre <- situ_penit %>% 
+  # HORS LSC
+  filter(TOP_LSC==0) %>% 
+  # Redressement dates
+  mutate_at(vars(starts_with("DT_")), as.Date) %>% 
+  # Redressement aménagement de peine
+  mutate(top_detention = if_else(CD_MOTIF_HEBERGEMENT %in% c('PE','PSEM','PSE','SEFIP','DDSE'),0,1),    
+         AMENAGEMENT = case_when(
+    top_detention==0 & CD_MOTIF_HEBERGEMENT %in% c('PSE', 'PSEM', 'SEFIP') ~ "DDSE", #PSE
+    top_detention==0 & CD_MOTIF_HEBERGEMENT == 'DDSE'  ~ "DDSE",
+    top_detention==0 & CD_MOTIF_HEBERGEMENT == "PE" ~ "PE_nheb",
+    top_detention==0 & CD_TYPE_AMENAGEMENT %in% c('PSE', 'PSEM', 'SEFIP') ~ "DDSE", #PSE
+    top_detention==0 & CD_TYPE_AMENAGEMENT == 'DDSE' ~ "DDSE",
+    top_detention==0 & CD_TYPE_AMENAGEMENT == 'PE' ~ "PE_nheb",
+    top_detention==1 & CD_AMENAGEMENT_PEINE == "PE" ~ "PE_heb",
+    top_detention==1 & CD_AMENAGEMENT_PEINE == "SL" & (CD_STATUT_SEMI_LIBERTE == "O" | str_detect(CD_CATEG_ADMIN, "SL")) ~ "SL",
+    top_detention==1 & CD_TYPE_AMENAGEMENT == "SL" & (CD_STATUT_SEMI_LIBERTE == "O" | str_detect(CD_CATEG_ADMIN, "SL")) ~ "SL"
+  )) %>% 
+  filter(!is.na(AMENAGEMENT)) %>% 
+  # Adaptation des dates
+  mutate(DT_DEBUT_AP = case_when( 
+    is.na(DT_DEBUT_EXEC)|DT_DEBUT_EXEC<DT_DEBUT_SITU_PENIT ~ DT_DEBUT_SITU_PENIT,
+     TRUE  ~ DT_DEBUT_EXEC),
+        DT_FIN_AP = case_when(
+    is.na(DT_SUSPSL)|DT_SUSPSL>DT_DEBUT_SITU_PENIT|year(DT_SUSPSL)==1900 ~ DT_FIN_SITU_PENIT,
+     TRUE  ~ DT_SUSPSL)) %>% 
+  # Enlever les variables inutiles
+  select(-DT_DEBUT_SITU_PENIT,-DT_FIN_SITU_PENIT,-top_detention, -CD_MOTIF_HEBERGEMENT, -CD_TYPE_AMENAGEMENT, -CD_STATUT_SEMI_LIBERTE,-CD_CATEG_ADMIN,-TOP_HEBERGE) %>% 
+  arrange(NM_ECROU_INIT,DT_DEBUT_AP)
+
+rm(situ_penit)
