@@ -201,6 +201,15 @@ eligible_ap[, `:=`(
   DT_DBT_ELIG = first(DT_SITU_PENALE),
   DT_FIN_ELIG = last(DT_NEXT_SITU_PENALE))
             , by=.(NM_ECROU_INIT,group)]
-
-
+### Garde qu'une ligne
+eligible_ap <- eligible_ap[, .SD[1], by=.(NM_ECROU_INIT,group)] # extract first row of groups.
+### créé un compteur d'éligibilité
+eligible_ap <- eligible_ap[ ,  `:=`( 
+  group = seq(.N),
+  nb_group = .N,
+  annee_dbt_elig_ap = year(DT_DBT_ELIG))
+  , by = .(NM_ECROU_INIT)]
+# table(eligible_ap$group)
+# 1      2      3      4      5 
+# 675016     30      9      2      1 
   
