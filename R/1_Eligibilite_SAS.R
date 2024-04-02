@@ -89,6 +89,8 @@ t_dwh_h_situ_penale <- open_dataset(paste0(path_dwh,"t_dwh_h_situ_penale.parquet
 
 
 gc()
+## Date max 
+DT_SITU_PENALE_MAX <- max(t_dwh_h_situ_penale$DT_SITU_PENALE)
 
 
 ## 1.2. Date d'écrou initial  ------
@@ -127,9 +129,8 @@ gc()
 ##2.1 Levée écrou et LC --------------
 h_situ_penale <- t_dwh_h_situ_penale %>% 
   left_join(t_dwh_f_mouvement) 
-
-rm(t_dwh_f_mouvement)
-
+# nettoyage
+rm(t_dwh_f_mouvement,t_dwh_h_situ_penale)
 ##2.2. Ecrou init / Elibilite LSC --------------
 # Passage en data.table
 # eligibilité en comparant date de mise à l'écrou et date de lib prev
@@ -179,14 +180,14 @@ h_situ_penale[, `:=`(
       QTM_FERME_TACC/360 <= 2 & 
       DT_TROIS_MOIS_AVT <= DT_NEXT_SITU_PENALE ,1L, 0L) #les parties 1L et 0L correspondent à des entiers littéraux en R, pour éviter que R croit à des décimaux ou autres
   )]
-#Supprimer dates de calcul
-
+# nettoyage
 rm(t_dwh_ecrou_init)
 
 #3. Eligibilité AP/LSC/LSC-D ---------
-##3.1. Période d'éligibilité à un aménagement de peine -------
-# Créer une colonne pour les groupes consécutifs de ELIG == 1
-## cumsum(ELIG==0) crée un groupe cumulatif (1, 1, 2, 2, 2, 2, 1, 2, 2, 2, 2) basé sur les indices où ELIG est égal à 0
+##3.1. ELIG_AP -------
+## Période d'éligibilité à un aménagement de peine (unique par NM_ECROU_INIT)
+### Créer une colonne pour les groupes consécutifs de ELIG == 1 (séparés par des lignes ELIG =0)
+### cumsum(ELIG==0) crée un groupe cumulatif (1, 1, 2, 2, 2, 2, 1, 2, 2, 2, 2) basé sur les indices où ELIG est égal à 0
 eligible_ap <- h_situ_penale[, group := cumsum(ELIGIBLE_AP==0)]
 ## rleid() crée un identifiant unique pour chaque groupe distinct par ID
 eligible_ap[, group := rleid(group), by=NM_ECROU_INIT]
@@ -212,4 +213,41 @@ eligible_ap <- eligible_ap[ ,  `:=`(
 # table(eligible_ap$group)
 # 1      2      3      4      5 
 # 675016     30      9      2      1 
-  
+### Qu'écrou avec un seul SPELL d'éligibilité
+eligible_ap <- eligible_ap[nb_group == 1, ]
+### Enleve les colonnes inutiles
+eligible_ap <- eligible_ap[, `:=`(
+  group = NULL,
+  nb_group = NULL,
+  DT_SITU_PENALE = NULL,
+  DT_NEXT_SITU_PENALE = NULL,
+  ELIGIBLE_AP = NULL
+)]
+# nettoyage
+rm(h_situ_penale)
+## 3.2 ELIG LSC(-D) ------
+## Pour LSC, dépend uniquement de l'éligibilité et de la date
+## Pour LSC-D, manque d'autres infos, pas dispo à ce stade
+eligible_ap <- eligible_ap[, `:=`(
+  DT_DBT_ELIG_LSC = fifelse(
+    ELIGIBLE_LSC == 1 & DT_DEUXTIERSDEPEINE <= DT_FIN_ELIG, 
+    pmax(DT_DEUXTIERSDEPEINE, DT_DBT_ELIG), # pour éviter de prendre une date avant le début de l'éligibilité à l'AP
+    NA_Date_), #vide sinon
+  DT_DBT_ELIG_LSCD = fifelse(
+    ELIGIBLE_LSCD == 1 & DT_TROIS_MOIS_AVT <= DT_FIN_ELIG, 
+    pmax(DT_TROIS_MOIS_AVT, DT_DBT_ELIG), 
+    NA_Date_),
+  DT_DEUXTIERSDEPEINE = NULL,
+  DT_TROIS_MOIS_AVT = NULL,
+  ELIGIBLE_LSC = NULL,
+  ELIGIBLE_LSCD = NULL
+)]
+## 3.3 Filtre et export -----
+## Filtres : 
+##  - pas de date de fin postérieure à la date de chargement des données
+##  - pas d'éligibilité avant 2016 (compris)
+eligible_ap <- eligible_ap[DT_FIN_ELIG < DT_SITU_PENALE_MAX &
+                             annee_dbt_elig_ap > 2016
+                           , ]
+## Export
+write_parquet(eligible_ap,paste0(path,"Export/eligible_ap.parquet"))
