@@ -36,6 +36,12 @@ un moyen efficace de lutter contre la récidive.
 
 # Organisation du programme de travail
 
+### Autres idées
+
+-   Qualité de l'aménagement (jusqu'au bout ou échec)
+
+-   Nb d'examens avant aménagement accordé
+
 ### Indicateurs à produire
 
 Aujourd’hui, les données suivantes remontent via des collectes
