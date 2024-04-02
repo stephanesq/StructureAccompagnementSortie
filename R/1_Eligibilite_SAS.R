@@ -258,8 +258,9 @@ write_parquet(eligible_ap,paste0(path,"Export/eligible_ap.parquet"))
 ### TOP_ECROUE ==1 : supprime les intervalles avec une libération (TOP_SORTIE_DEF ==0) et plus généralement les pas utiles 
 
 ## 4.1 Import -----
+## Redressement avec les règles de gestion
 t_dwh_h_situ_penit <- open_dataset(paste0(path_dwh,"t_dwh_h_situ_penit.parquet")) |> 
-  filter(TOP_ECROUE ==1) |>  
+  filter(TOP_ECROUE == 1) |>  
   select(NM_ECROU_INIT,
        DT_DEBUT_SITU_PENIT,DT_FIN_SITU_PENIT,
        CD_MOTIF_HEBERGEMENT,TOP_HEBERGE,CD_STATUT_SEMI_LIBERTE, CD_CATEG_ADMIN,
@@ -294,24 +295,9 @@ rm(ECROU_ELIG)
 #Récupérer l'aménagement HORS LSC
 
 situ_penit_propre <- situ_penit %>% 
-  # HORS LSC
-  filter(TOP_LSC==0) %>% 
   # Redressement dates
   mutate_at(vars(starts_with("DT_")), as.Date) %>% 
-  # Redressement aménagement de peine
-  mutate(top_detention = if_else(CD_MOTIF_HEBERGEMENT %in% c('PE','PSEM','PSE','SEFIP','DDSE'),0,1),    
-         AMENAGEMENT = case_when(
-    top_detention==0 & CD_MOTIF_HEBERGEMENT %in% c('PSE', 'PSEM', 'SEFIP') ~ "DDSE", #PSE
-    top_detention==0 & CD_MOTIF_HEBERGEMENT == 'DDSE'  ~ "DDSE",
-    top_detention==0 & CD_MOTIF_HEBERGEMENT == "PE" ~ "PE_nheb",
-    top_detention==0 & CD_TYPE_AMENAGEMENT %in% c('PSE', 'PSEM', 'SEFIP') ~ "DDSE", #PSE
-    top_detention==0 & CD_TYPE_AMENAGEMENT == 'DDSE' ~ "DDSE",
-    top_detention==0 & CD_TYPE_AMENAGEMENT == 'PE' ~ "PE_nheb",
-    top_detention==1 & CD_AMENAGEMENT_PEINE == "PE" ~ "PE_heb",
-    top_detention==1 & CD_AMENAGEMENT_PEINE == "SL" & (CD_STATUT_SEMI_LIBERTE == "O" | str_detect(CD_CATEG_ADMIN, "SL")) ~ "SL",
-    top_detention==1 & CD_TYPE_AMENAGEMENT == "SL" & (CD_STATUT_SEMI_LIBERTE == "O" | str_detect(CD_CATEG_ADMIN, "SL")) ~ "SL"
-  )) %>% 
-  filter(!is.na(AMENAGEMENT)) %>% 
+
   # Adaptation des dates
   mutate(DT_DEBUT_AP = case_when( 
     is.na(DT_DEBUT_EXEC)|DT_DEBUT_EXEC<DT_DEBUT_SITU_PENIT ~ DT_DEBUT_SITU_PENIT,
