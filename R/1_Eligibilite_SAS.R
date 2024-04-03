@@ -283,14 +283,15 @@ t_dwh_h_situ_penit <- open_dataset(paste0(path_dwh,"t_dwh_h_situ_penit.parquet")
   collect() 
 # table(T_DWH_H_SITU_PENIT$TOP_ECROUE,T_DWH_H_SITU_PENIT$TOP_SORTIE_DEF)
 
-situ_penit <- ECROU_ELIG %>% 
-  left_join(T_DWH_H_SITU_PENIT %>% 
-              select(NM_ECROU_INIT,DT_DEBUT_SITU_PENIT,DT_FIN_SITU_PENIT,CD_MOTIF_HEBERGEMENT,TOP_HEBERGE,TOP_LSC, CD_TYPE_AMENAGEMENT, CD_AMENAGEMENT_PEINE, DT_DEBUT_EXEC,DT_SUSPSL,CD_STATUT_SEMI_LIBERTE, CD_CATEG_ADMIN)
-  ) %>% 
-  distinct() 
+## 4.2 Modification ------
+## Récupérer les écrous de la table précédente
+situ_penit <- open_dataset(paste0(path,"Export/eligible_ap.parquet")) |>  
+  select(NM_ECROU_INIT) |> 
+  collect() |> 
+    left_join(t_dwh_h_situ_penit) |> 
+    distinct() 
 
-rm(T_DWH_H_SITU_PENIT)
-rm(ECROU_ELIG)
+rm(t_dwh_h_situ_penit)
 
 #Récupérer l'aménagement HORS LSC
 
@@ -310,3 +311,23 @@ situ_penit_propre <- situ_penit %>%
   arrange(NM_ECROU_INIT,DT_DEBUT_AP)
 
 rm(situ_penit)
+
+# changement des formats
+mutate(
+  across(starts_with("DT_"), as.Date),
+  across(starts_with("QTM_"), as.numeric)
+) |>
+  # Quantum ferme
+  mutate(QTM_FERME_TACC = QTM_FERME_TACC_A * 360 + QTM_FERME_TACC_M * 30 + QTM_FERME_TACC_S * 7 + QTM_FERME_TACC_J) |>
+  select(-QTM_FERME_TACC_A, -QTM_FERME_TACC_M, -QTM_FERME_TACC_S, -QTM_FERME_TACC_J)  |>
+  # Tri pour la suite
+  arrange(NM_ECROU_INIT, DT_DEBUT_SITU_PENALE)  |>
+  
+  group_by(NM_ECROU_INIT) |>
+  # garder date fin en date début
+  mutate(DT_SITU_PENALE = lag(DT_FIN_SITU_PENALE, default = first(DT_DEBUT_SITU_PENALE, na.rm = TRUE))) |>
+  ungroup() |>
+  # on enlève les dates inutiles
+  select(-DT_FIN_SITU_PENALE, -DT_DEBUT_SITU_PENALE) |>
+  # on garde que ligne exploitable (situ < lib_prev et lib_prev dispo)
+  filter(DT_SITU_PENALE <= DT_LIBE_PREV & !is.na(DT_LIBE_PREV)) |>
