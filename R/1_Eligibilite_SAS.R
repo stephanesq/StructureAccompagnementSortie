@@ -277,21 +277,202 @@ t_dwh_h_situ_penit <- open_dataset(paste0(path_dwh,"t_dwh_h_situ_penit.parquet")
            top_detention==0 & CD_TYPE_AMENAGEMENT == 'PE' ~ "PE_nheb",
            top_detention==1 & CD_AMENAGEMENT_PEINE == "PE" ~ "PE_heb",
            top_detention==1 & CD_AMENAGEMENT_PEINE == "SL" & (CD_STATUT_SEMI_LIBERTE == "O" | str_detect(CD_CATEG_ADMIN, "SL")) ~ "SL",
-           top_detention==1 & CD_TYPE_AMENAGEMENT == "SL" & (CD_STATUT_SEMI_LIBERTE == "O" | str_detect(CD_CATEG_ADMIN, "SL")) ~ "SL"
+           top_detention==1 & CD_TYPE_AMENAGEMENT == "SL" & (CD_STATUT_SEMI_LIBERTE == "O" | str_detect(CD_CATEG_ADMIN, "SL")) ~ "SL",
+           .default = NA_character_
          )) %>% 
-  filter(!is.na(AMENAGEMENT)) |> 
+  # Pas possible de filtrer maintenant à cause des problèmes de décalage de date des début de situ penit
+  # filter(!is.na(AMENAGEMENT)) |> 
+  select(-top_detention, -CD_MOTIF_HEBERGEMENT, -CD_TYPE_AMENAGEMENT, -CD_AMENAGEMENT_PEINE,-CD_STATUT_SEMI_LIBERTE,-CD_CATEG_ADMIN,-TOP_HEBERGE) |>
   collect() 
 # table(T_DWH_H_SITU_PENIT$TOP_ECROUE,T_DWH_H_SITU_PENIT$TOP_SORTIE_DEF)
 
 ## 4.2 Modification ------
 ## Récupérer les écrous de la table précédente
-situ_penit <- open_dataset(paste0(path,"Export/eligible_ap.parquet")) |>  
+h_situ_penit <- open_dataset(paste0(path,"Export/eligible_ap.parquet")) |>  
   select(NM_ECROU_INIT) |> 
   collect() |> 
-    left_join(t_dwh_h_situ_penit) |> 
+    inner_join(t_dwh_h_situ_penit) |> 
     distinct() 
 
-rm(t_dwh_h_situ_penit)
+# rm(t_dwh_h_situ_penit)
+
+### Passage en data.table
+h_situ_penit <- data.table(h_situ_penit)
+setkey(h_situ_penit,NM_ECROU_INIT)
+
+### 4.2.2. Changement organisation table (data.table) -----
+# Décalage puis que aménagement et que bonne date
+# fill using first : https://rdatatable.gitlab.io/data.table/reference/shift.html
+h_situ_penit <- h_situ_penit[order(NM_ECROU_INIT, DT_DEBUT_SITU_PENIT)]
+h_situ_penit[ , DT_SITU_PENIT := shift(DT_FIN_SITU_PENIT, 
+                                    fill=DT_DEBUT_SITU_PENIT[1L], 
+                                    n=1, 
+                                    type="lag")
+            , by=NM_ECROU_INIT]
+# supprime les intervalles
+h_situ_penit <- h_situ_penit[,`:=`(
+  DT_DEBUT_SITU_PENIT=NULL,
+  DT_FIN_SITU_PENIT=NULL
+)]
+# dédoublonne et tri
+h_situ_penit <- unique(h_situ_penit)
+h_situ_penit <- h_situ_penit[order(NM_ECROU_INIT, DT_SITU_PENIT)]
+# identifier les périodes avec aménagement
+# utiliser les DT_DEBUT_EXEC et les DT_SUSPSL pour modifier ces périodes
+h_situ_penit <- h_situ_penit[,`:=`(
+  DT_SITU_PENIT = fifelse(
+    !is.na(DT_DEBUT_EXEC) & !is.na(AMENAGEMENT) & #date et aménagement renseigné
+      DT_DEBUT_EXEC>DT_SITU_PENIT & 
+      ( DT_DEBUT_EXEC <= shift(DT_SITU_PENIT, n=1, type="lead") | 
+        is.na(shift(DT_SITU_PENIT, n=1, type="lead"))
+      ) #si la date de début d'exécution commence avant la ligne suivante ou qu'il n'y en a pas
+    ,DT_DEBUT_EXEC
+    ,DT_SITU_PENIT
+  ),
+  AMENAGEMENT = fifelse(
+    !is.na(DT_DEBUT_EXEC) & !is.na(AMENAGEMENT) & #date et aménagement renseigné
+      DT_DEBUT_EXEC>DT_SITU_PENIT & 
+      ( DT_DEBUT_EXEC <= shift(DT_SITU_PENIT, n=1, type="lead") | 
+          is.na(shift(DT_SITU_PENIT, n=1, type="lead"))
+      ) #si la date de début d'exécution commence avant la ligne suivante ou qu'il n'y en a pas
+    , NA_character_
+    , AMENAGEMENT
+    ))]
+# pareil avec suspension 
+h_situ_penit <- h_situ_penit[,`:=`(
+  DT_SITU_PENIT = fifelse(
+    !is.na(DT_SUSPSL) & !is.na(AMENAGEMENT) & year(DT_SUSPSL)>1900 & #date et aménagement renseigné
+      DT_SUSPSL>=DT_SITU_PENIT & (
+        DT_SUSPSL <= shift(DT_SITU_PENIT, n=1, type="lead") | 
+        is.na(shift(DT_SITU_PENIT, n=1, type="lead"))
+              )
+    ,DT_SUSPSL
+    ,DT_SITU_PENIT
+  ),
+  AMENAGEMENT = fifelse(
+      !is.na(DT_SUSPSL) & !is.na(AMENAGEMENT) & year(DT_SUSPSL)>1900 & #date et aménagement renseigné
+        DT_SUSPSL>=DT_SITU_PENIT & (
+          DT_SUSPSL <= shift(DT_SITU_PENIT, n=1, type="lead") | 
+            is.na(shift(DT_SITU_PENIT, n=1, type="lead"))
+        )
+      ,NA_character_
+      ,AMENAGEMENT
+    ),
+  INDIC_AMENAGEMENT = fifelse(is.na(AMENAGEMENT),0,1),
+  )]
+# supprime les intervalles
+h_situ_penit <- h_situ_penit[,`:=`(
+  DT_DEBUT_EXEC=NULL,
+  DT_SUSPSL=NULL
+)]
+### 4.2.3. Phase d'AP ------
+### 
+##3.1. ELIG_AP -------
+## Période d'éligibilité à un aménagement de peine (unique par NM_ECROU_INIT)
+### Créer une colonne pour les groupes consécutifs de ELIG == 1 (séparés par des lignes ELIG =0)
+### cumsum(ELIG==0) crée un groupe cumulatif (1, 1, 2, 2, 2, 2, 1, 2, 2, 2, 2) basé sur les indices où ELIG est égal à 0
+situ_penit_ap <- h_situ_penit[, group := cumsum(INDIC_AMENAGEMENT==0)]
+## rleid() crée un identifiant unique pour chaque groupe distinct par ID
+situ_penit_ap[, group := rleid(group), by=NM_ECROU_INIT]
+## supprime
+situ_penit_ap <-eligible_ap[INDIC_AMENAGEMENT==1,]
+## Dates début et fin
+### 
+eligible_ap <- eligible_ap[order(NM_ECROU_INIT, DT_SITU_PENIT, group)]
+setkeyv(eligible_ap,c("NM_ECROU_INIT","group"))
+### 
+eligible_ap[, `:=`(
+  DT_DBT_ELIG = first(DT_SITU_PENALE),
+  DT_FIN_ELIG = last(DT_NEXT_SITU_PENALE))
+  , by=.(NM_ECROU_INIT,group)]
+### Garde qu'une ligne
+eligible_ap <- eligible_ap[, .SD[1], by=.(NM_ECROU_INIT,group)] # extract first row of groups.
+### créé un compteur d'éligibilité
+eligible_ap <- eligible_ap[ ,  `:=`( 
+  group = seq(.N),
+  nb_group = .N,
+  annee_dbt_elig_ap = year(DT_DBT_ELIG))
+  , by = .(NM_ECROU_INIT)]
+# table(eligible_ap$group)
+# 1      2      3      4      5 
+# 675016     30      9      2      1 
+### Qu'écrou avec un seul SPELL d'éligibilité
+eligible_ap <- eligible_ap[nb_group == 1, ]
+### Enleve les colonnes inutiles
+eligible_ap <- eligible_ap[, `:=`(
+  group = NULL,
+  nb_group = NULL,
+  DT_SITU_PENALE = NULL,
+  DT_NEXT_SITU_PENALE = NULL,
+  ELIGIBLE_AP = NULL
+)]
+# nettoyage
+rm(h_situ_penale)
+
+
+
+# Ensuite avec la suspension : modif date et INDIC_AMENAGEMENT = 0 si suspendu
+test <- h_situ_penit[,`:=`(
+  INDIC_AMENAGEMENT = fifelse(is.na(AMENAGEMENT),0,1),
+  DT_SITU_PENIT2 = fifelse(
+    is.na(DT_DEBUT_EXEC)|DT_DEBUT_EXEC<DT_SITU_PENI,DT_SITU_PENI
+    ,DT_DEBUT_EXEC),
+  DT_FIN_S = fifelse(
+    is.na(DT_SUSPSL)|DT_SUSPSL>=DT_SITU_PENI|year(DT_SUSPSL)==1900,DT_SITU_PENI
+    , DT_SUSPSL) #,
+  # DT_DEBUT_SITU_PENIT=NULL,
+  # DT_FIN_SITU_PENIT=NULL
+)]
+
+# Que aménagement
+# h_situ_penit <- h_situ_penit[!is.na(AMENAGEMENT), ]
+
+### 4.2.1. Modif date (data.table)
+
+test <- h_situ_penit[, `:=`(
+  DT_DEBUT_S = fifelse(
+    is.na(DT_DEBUT_EXEC)|DT_DEBUT_EXEC<DT_DEBUT_SITU_PENIT,DT_DEBUT_SITU_PENIT
+    ,DT_DEBUT_EXEC),
+  DT_FIN_S = fifelse(
+    is.na(DT_SUSPSL)|DT_SUSPSL>=DT_FIN_SITU_PENIT|year(DT_SUSPSL)==1900,DT_FIN_SITU_PENIT
+    , DT_SUSPSL) 
+  ) ]
+
+
+
+
+situ_penit[, `:=`(
+  DT_DEBUT_SITU_PENIT = fcoalesce(
+    shift(DT_FIN_SITU_PENIT, type = "lag"),
+    DT_LIBE_PREV)
+), by = NM_ECROU_INIT]
+
+# Adaptation des dates
+mutate(DT_DEBUT_AP = case_when( 
+  is.na(DT_DEBUT_EXEC)|DT_DEBUT_EXEC<DT_DEBUT_SITU_PENIT ~ DT_DEBUT_SITU_PENIT,
+  TRUE  ~ DT_DEBUT_EXEC),
+  DT_FIN_AP = case_when(
+    is.na(DT_SUSPSL)|DT_SUSPSL>DT_DEBUT_SITU_PENIT|year(DT_SUSPSL)==1900 ~ DT_FIN_SITU_PENIT,
+    TRUE  ~ DT_SUSPSL)) %>% 
+  # Enlever les variables inutiles
+  select(-DT_DEBUT_SITU_PENIT,-DT_FIN_SITU_PENIT,-top_detention, -CD_MOTIF_HEBERGEMENT, -CD_TYPE_AMENAGEMENT, -CD_STATUT_SEMI_LIBERTE,-CD_CATEG_ADMIN,-TOP_HEBERGE) %>% 
+  arrange(NM_ECROU_INIT,DT_DEBUT_AP)
+
+# Calcul 2/3 de peine
+h_situ_penale[, `:=`(
+  DT_DEUXTIERSDEPEINE = floor_date(
+    time_length(difftime(DT_LIBE_PREV, DT_ECROU_INITIAL), "days") * 2/3 + DT_ECROU_INITIAL,
+    unit = "day"
+  ),
+  DT_DEUX_ANS_AVT = DT_LIBE_PREV - years(2),
+  DT_TROIS_MOIS_AVT = DT_LIBE_PREV - months(3)
+)]
+
+# Récupére prochaine situ pénale (shift) ou date lib prev si absente (fcoalesce)
+h_situ_penale <- h_situ_penale[order(NM_ECROU_INIT, DT_SITU_PENALE)]
+
+
+
 
 #Récupérer l'aménagement HORS LSC
 
@@ -299,16 +480,7 @@ situ_penit_propre <- situ_penit %>%
   # Redressement dates
   mutate_at(vars(starts_with("DT_")), as.Date) %>% 
 
-  # Adaptation des dates
-  mutate(DT_DEBUT_AP = case_when( 
-    is.na(DT_DEBUT_EXEC)|DT_DEBUT_EXEC<DT_DEBUT_SITU_PENIT ~ DT_DEBUT_SITU_PENIT,
-     TRUE  ~ DT_DEBUT_EXEC),
-        DT_FIN_AP = case_when(
-    is.na(DT_SUSPSL)|DT_SUSPSL>DT_DEBUT_SITU_PENIT|year(DT_SUSPSL)==1900 ~ DT_FIN_SITU_PENIT,
-     TRUE  ~ DT_SUSPSL)) %>% 
-  # Enlever les variables inutiles
-  select(-DT_DEBUT_SITU_PENIT,-DT_FIN_SITU_PENIT,-top_detention, -CD_MOTIF_HEBERGEMENT, -CD_TYPE_AMENAGEMENT, -CD_STATUT_SEMI_LIBERTE,-CD_CATEG_ADMIN,-TOP_HEBERGE) %>% 
-  arrange(NM_ECROU_INIT,DT_DEBUT_AP)
+
 
 rm(situ_penit)
 
