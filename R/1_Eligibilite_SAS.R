@@ -440,11 +440,53 @@ situ_penit_ap <- situ_penit_ap[DT_DBT_AP <= DT_SITU_PENIT_MAX &
                                annee_dbt_ap > 2016
                            , ]
 ## Export
-write_parquet(situ_penit_ap,paste0(path,"Export/eligible_ap.parquet"))
+write_parquet(situ_penit_ap,paste0(path,"Export/situ_penit_ap.parquet"))
 
 
 # 5. Premières analyses -----
 ## 5.1. Analyse de survie (Larmarange) -----
 ## https://larmarange.github.io/analyse-R/analyse-de-survie.html
-## 
-enfants[, duree_observation := time_length(interval(date_naissance, date_entretien), unit = "months")]
+### 5.1.1. Import -----
+suivi_ap <-  open_dataset(paste0(path,"Export/eligible_ap.parquet")) |>  
+  left_join(
+    open_dataset(paste0(path,"Export/situ_penit_ap.parquet")) |> 
+      select(-DT_LEVEECR)
+  ) |> 
+  collect()
+suivi_ap <- data.table(suivi_ap)
+### Filtre dates incohérentes (> à observation de l'autre)
+DT_SITU_PENAL_MAX <- max(suivi_ap$DT_FIN_ELIG, na.rm = T) #max de la situation pénale
+DT_SITU_PENIT_MAX <- max(suivi_ap$DT_DBT_AP, na.rm = T) #max de la situ penit
+DT_MAX <- pmin(DT_SITU_PENIT_MAX,DT_SITU_PENALE_MAX) # la plus petite des deux
+suivi_ap <- suivi_ap[DT_FIN_ELIG <= DT_MAX & 
+                       (is.na(DT_DBT_AP) | DT_DBT_AP <= DT_MAX), ] #on retire les infos post
+### 5.1.2. Variables nécessaires ------
+## Durée observation
+suivi_ap[, duree_observation := time_length(interval(DT_DBT_ELIG, DT_FIN_ELIG), unit = "days")]
+## Durée AP + imputer pour éviter égalité avec une décimale
+suivi_ap[, duree_ap := time_length(interval(DT_DBT_ELIG, DT_DBT_AP), unit = "days")]
+suivi_ap[, duree_ap_impute := duree_ap + runif(.N)]
+## Variable de censure
+suivi_ap[, AP := 0]
+suivi_ap[is.na(AMENAGEMENT) == 0, AP := 1]
+## Temps
+suivi_ap[, time := duree_observation]
+suivi_ap[AP == 1, time := duree_ap_impute]
+
+
+library(ggsurvfit)
+
+p <- survfit2(Surv(time, AP) ~ 1, data = suivi_ap) |>
+  ggsurvfit(linewidth = 1) +
+  add_confidence_interval() +
+  add_risktable() +
+  add_quantile(y_value = 0.6, color = "gray50", linewidth = 0.75) +
+  scale_ggsurvfit()
+p +
+  # limit plot to show 8 years and less
+  coord_cartesian(xlim = c(0, 8)) +
+  # update figure labels/titles
+  labs(
+    y = "Percentage Survival",
+    title = "Recurrence by Time From Surgery to Randomization",
+  )
