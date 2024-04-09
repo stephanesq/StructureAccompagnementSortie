@@ -462,20 +462,21 @@ suivi_ap <- suivi_ap[DT_FIN_ELIG <= DT_MAX &
                        (is.na(DT_DBT_AP) | DT_DBT_AP <= DT_MAX), ] #on retire les infos post
 ### 5.1.2. Variables nécessaires ------
 ## Durée observation
-suivi_ap[, duree_observation := time_length(interval(DT_DBT_ELIG, DT_FIN_ELIG), unit = "days")]
+suivi_ap[, duree_observation := time_length(interval(DT_DBT_ELIG, DT_FIN_ELIG), unit = "months")]
 ## Durée AP + imputer pour éviter égalité avec une décimale
-suivi_ap[, duree_ap := time_length(interval(DT_DBT_ELIG, DT_DBT_AP), unit = "days")]
+suivi_ap[, duree_ap := time_length(interval(DT_DBT_ELIG, DT_DBT_AP), unit = "months")]
 suivi_ap[, duree_ap_impute := duree_ap + runif(.N)]
 ## Variable de censure
 suivi_ap[, AP := 0]
-suivi_ap[is.na(AMENAGEMENT) == 0, AP := 1]
+suivi_ap[!is.na(AMENAGEMENT), AP := 1]
 ## Temps
 suivi_ap[, time := duree_observation]
 suivi_ap[AP == 1, time := duree_ap_impute]
 
 
 library(ggsurvfit)
-
+# https://www.danieldsjoberg.com/ggsurvfit/
+# 
 p <- survfit2(Surv(time, AP) ~ 1, data = suivi_ap) |>
   ggsurvfit(linewidth = 1) +
   add_confidence_interval() +
@@ -483,10 +484,10 @@ p <- survfit2(Surv(time, AP) ~ 1, data = suivi_ap) |>
   add_quantile(y_value = 0.6, color = "gray50", linewidth = 0.75) +
   scale_ggsurvfit()
 p +
-  # limit plot to show 8 years and less
-  coord_cartesian(xlim = c(0, 8)) +
+  # limit plot to show 24 months and less
+  coord_cartesian(xlim = c(0, 24)) +
   # update figure labels/titles
   labs(
-    y = "Percentage Survival",
+    y = "Pourcentage sans aménagement",
     title = "Recurrence by Time From Surgery to Randomization",
   )
