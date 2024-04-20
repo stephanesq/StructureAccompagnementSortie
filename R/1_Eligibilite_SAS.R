@@ -422,12 +422,11 @@ situ_penit_ap <- situ_penit_ap[ ,  `:=`(
 # table(situ_penit_ap$group)
 # 1      2      3      4      5      6      7      8      9     10 
 # 241888  11521   1257    188     37     13      6      4      2      1 
-### QConserve que la première phase d'AP
-situ_penit_ap <- situ_penit_ap[group == 1, ]
+### QConserve que la première phase d'AP -> pour l'instant pas besoin 
+# situ_penit_ap <- situ_penit_ap[group == 1, ]
 ### Enleve les colonnes inutiles
 DT_SITU_PENIT_MAX <- max(situ_penit_ap$DT_SITU_PENIT)
 situ_penit_ap <- situ_penit_ap[, `:=`(
-  group = NULL,
   DT_SITU_PENIT = NULL,
   DT_NEXT_SITU_PENIT = NULL,
   INDIC_AMENAGEMENT = NULL
@@ -447,10 +446,13 @@ write_parquet(situ_penit_ap,paste0(path,"Export/situ_penit_ap.parquet"))
 ## 5.1. Analyse de survie (Larmarange) -----
 ## https://larmarange.github.io/analyse-R/analyse-de-survie.html
 ### 5.1.1. Import -----
-suivi_ap <-  open_dataset(paste0(path,"Export/eligible_ap.parquet")) |>  
+suivi_ap <-  open_dataset(paste0(path,"Export/eligible_ap.parquet")) |>
+  select(-annee_dbt_elig_ap, -DT_DEUX_ANS_AVT) |> 
   left_join(
     open_dataset(paste0(path,"Export/situ_penit_ap.parquet")) |> 
-      select(-DT_LEVEECR)
+      select(-DT_LEVEECR, -annee_dbt_ap),
+    by = join_by(NM_ECROU_INIT,
+                 closest(DT_DBT_ELIG >= DT_DBT_AP))
   ) |> 
   collect()
 suivi_ap <- data.table(suivi_ap)
@@ -473,11 +475,26 @@ suivi_ap[!is.na(AMENAGEMENT), AP := 1]
 suivi_ap[, time := duree_observation]
 suivi_ap[AP == 1, time := duree_ap_impute]
 
-
-library(ggsurvfit)
+## 5.2 Kapman Meier -----
 # https://www.danieldsjoberg.com/ggsurvfit/
-# 
-p <- survfit2(Surv(time, AP) ~ 1, data = suivi_ap) |>
+# KM
+p <- ggsurvfit::survfit2(Surv(time, AP) ~ annee_dbt_elig_ap, data = suivi_ap) |>
+  ggsurvfit(linewidth = 1) +
+  add_confidence_interval() +
+  add_risktable() +
+  add_quantile(y_value = 0.6, color = "gray50", linewidth = 0.75) +
+  scale_ggsurvfit()
+p +
+  # limit plot to show 24 months and less
+  coord_cartesian(xlim = c(0, 24)) +
+  # update figure labels/titles
+  labs(
+    y = "Pourcentage sans aménagement",
+    title = "Recurrence by Time From Surgery to Randomization",
+  )
+
+## Par type d'aménagement 
+p <- ggsurvfit::survfit2(Surv(time, AMENAGEMENT) ~ annee_dbt_elig_ap , data = suivi_ap) |>
   ggsurvfit(linewidth = 1) +
   add_confidence_interval() +
   add_risktable() +
