@@ -442,10 +442,8 @@ situ_penit_ap <- situ_penit_ap[DT_DBT_AP <= DT_SITU_PENIT_MAX &
 write_parquet(situ_penit_ap,paste0(path,"Export/situ_penit_ap.parquet"))
 
 
-# 5. Premières analyses -----
-## 5.1. Analyse de survie (Larmarange) -----
-## https://larmarange.github.io/analyse-R/analyse-de-survie.html
-### 5.1.1. Import -----
+# 5. Table finale ----
+## 5.1. Import -----
 suivi_ap <-  open_dataset(paste0(path,"Export/eligible_ap.parquet")) |>
   select(-annee_dbt_elig_ap, -DT_DEUX_ANS_AVT) |> 
   left_join(
@@ -462,6 +460,17 @@ DT_SITU_PENIT_MAX <- max(suivi_ap$DT_DBT_AP, na.rm = T) #max de la situ penit
 DT_MAX <- pmin(DT_SITU_PENIT_MAX,DT_SITU_PENALE_MAX) # la plus petite des deux
 suivi_ap <- suivi_ap[DT_FIN_ELIG <= DT_MAX & 
                        (is.na(DT_DBT_AP) | DT_DBT_AP <= DT_MAX), ] #on retire les infos post
+## 5.2 LC dans les mesures -----
+## 30150 30160 30520 (REVOCATION TOTALE LC)
+
+## 5.3 Export -----
+
+
+# 6. Premières analyses -----
+## 6.1. Analyse de survie (Larmarange) -----
+## https://larmarange.github.io/analyse-R/analyse-de-survie.html
+### 5.1.1. Import -----
+
 ### 5.1.2. Variables nécessaires ------
 ## Durée observation
 suivi_ap[, duree_observation := time_length(interval(DT_DBT_ELIG, DT_FIN_ELIG), unit = "months")]
