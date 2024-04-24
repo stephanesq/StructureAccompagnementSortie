@@ -10,8 +10,9 @@
 # 
 # - Modifier situ pénale
 #   - Conserver que CON ou CP
+#   - Renormalisation : 
+#       Une date de situation plutôt que date de début = date de fin  + 1
 #   - situ pénale avant libération OU si LC avant date de libération prévisionnelle
-#   - Renormalisation : une date de situation plutôt que date de début = date de fin  + 1
 #   
 # - Eligibilite 
 #   - Rappel des critères
@@ -145,14 +146,15 @@ setkey(t_dwh_ecrou_init,NM_ECROU_INIT)
 # Inner join avec date écrou initial nomatch=0 -> autre possibilité merge() de data.table
 h_situ_penale <- h_situ_penale[t_dwh_ecrou_init, nomatch = 0]
 
-# Calcul 2/3 de peine
+# Calcul 2/3 de peine + date de fin de peine
 h_situ_penale[, `:=`(
   DT_DEUXTIERSDEPEINE = floor_date(
     time_length(difftime(DT_LIBE_PREV, DT_ECROU_INITIAL), "days") * 2/3 + DT_ECROU_INITIAL,
     unit = "day"
   ),
   DT_DEUX_ANS_AVT = DT_LIBE_PREV - years(2),
-  DT_TROIS_MOIS_AVT = DT_LIBE_PREV - months(3)
+  DT_TROIS_MOIS_AVT = DT_LIBE_PREV - months(3),
+  DT_FIN_PEINE = if_else(LEVEECR_LC == 1, DT_LEVEECR, DT_LIBE_PREV)
 )]
 
 # Récupére prochaine situ pénale (shift) ou date lib prev si absente (fcoalesce)
@@ -160,7 +162,7 @@ h_situ_penale <- h_situ_penale[order(NM_ECROU_INIT, DT_SITU_PENALE)]
 h_situ_penale[, `:=`(
   DT_NEXT_SITU_PENALE = fcoalesce(
     shift(DT_SITU_PENALE, type = "lead"),
-    DT_LIBE_PREV)
+    DT_FIN_PEINE)
   ), by = NM_ECROU_INIT]
 
 # calcul éligibilité
