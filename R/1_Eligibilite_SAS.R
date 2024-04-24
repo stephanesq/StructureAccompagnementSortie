@@ -28,7 +28,7 @@
 
 # paramètres ---------
 # packages ----
-pacman::p_load(tidyverse, arrow, data.table, janitor, haven, styler,data.table)
+pacman::p_load(tidyverse, arrow, data.table, janitor, haven, styler,data.table, ggsurvfit)
 # chemin ------
 path = paste0(here::here(),"/Donnees/")
 path_dwh = "~/Documents/Recherche/3_Evaluation/_DATA/INFPENIT/"
@@ -145,6 +145,8 @@ setkey(t_dwh_ecrou_init,NM_ECROU_INIT)
 
 # Inner join avec date écrou initial nomatch=0 -> autre possibilité merge() de data.table
 h_situ_penale <- h_situ_penale[t_dwh_ecrou_init, nomatch = 0]
+# nettoyage
+rm(t_dwh_ecrou_init)
 
 # Calcul 2/3 de peine + date de fin de peine
 h_situ_penale[, `:=`(
@@ -154,7 +156,7 @@ h_situ_penale[, `:=`(
   ),
   DT_DEUX_ANS_AVT = DT_LIBE_PREV - years(2),
   DT_TROIS_MOIS_AVT = DT_LIBE_PREV - months(3),
-  DT_FIN_PEINE = if_else(LEVEECR_LC == 1, DT_LEVEECR, DT_LIBE_PREV)
+  DT_FIN_PEINE = if_else(LEVEECR_LC == 1, DT_LIBE_PREV,DT_LEVEECR) #date de libération prévisionnelle si sortie pour LC sinon 
 )]
 
 # Récupére prochaine situ pénale (shift) ou date lib prev si absente (fcoalesce)
@@ -163,7 +165,8 @@ h_situ_penale[, `:=`(
   DT_NEXT_SITU_PENALE = fcoalesce(
     shift(DT_SITU_PENALE, type = "lead"),
     DT_FIN_PEINE)
-  ), by = NM_ECROU_INIT]
+  ), 
+  by = NM_ECROU_INIT]
 
 # calcul éligibilité
 h_situ_penale[, `:=`(
@@ -182,8 +185,7 @@ h_situ_penale[, `:=`(
       QTM_FERME_TACC/360 <= 2 & 
       DT_TROIS_MOIS_AVT <= DT_NEXT_SITU_PENALE ,1L, 0L) #les parties 1L et 0L correspondent à des entiers littéraux en R, pour éviter que R croit à des décimaux ou autres
   )]
-# nettoyage
-rm(t_dwh_ecrou_init)
+
 
 #3. Eligibilité AP/LSC/LSC-D ---------
 ##3.1. ELIG_AP -------
@@ -213,8 +215,8 @@ eligible_ap <- eligible_ap[ ,  `:=`(
   annee_dbt_elig_ap = year(DT_DBT_ELIG))
   , by = .(NM_ECROU_INIT)]
 # table(eligible_ap$group)
-# 1      2      3      4      5 
-# 675016     30      9      2      1 
+# 1      2 
+# 660756      1
 ### Qu'écrou avec un seul SPELL d'éligibilité
 eligible_ap <- eligible_ap[nb_group == 1, ]
 ### Enleve les colonnes inutiles
@@ -448,13 +450,14 @@ write_parquet(situ_penit_ap,paste0(path,"Export/situ_penit_ap.parquet"))
 ## 5.1. Import -----
 suivi_ap <-  open_dataset(paste0(path,"Export/eligible_ap.parquet")) |>
   select(-annee_dbt_elig_ap, -DT_DEUX_ANS_AVT) |> 
+  collect() |> 
   left_join(
     open_dataset(paste0(path,"Export/situ_penit_ap.parquet")) |> 
-      select(-DT_LEVEECR, -annee_dbt_ap),
+      select(-DT_LEVEECR, -annee_dbt_ap) |> 
+      collect(),
     by = join_by(NM_ECROU_INIT,
-                 closest(DT_DBT_ELIG >= DT_DBT_AP))
-  ) |> 
-  collect()
+                 closest(DT_DBT_ELIG <= DT_DBT_AP))
+  ) 
 suivi_ap <- data.table(suivi_ap)
 ### Filtre dates incohérentes (> à observation de l'autre)
 DT_SITU_PENAL_MAX <- max(suivi_ap$DT_FIN_ELIG, na.rm = T) #max de la situation pénale
@@ -462,26 +465,54 @@ DT_SITU_PENIT_MAX <- max(suivi_ap$DT_DBT_AP, na.rm = T) #max de la situ penit
 DT_MAX <- pmin(DT_SITU_PENIT_MAX,DT_SITU_PENALE_MAX) # la plus petite des deux
 suivi_ap <- suivi_ap[DT_FIN_ELIG <= DT_MAX & 
                        (is.na(DT_DBT_AP) | DT_DBT_AP <= DT_MAX), ] #on retire les infos post
-## 5.2 LC dans les mesures -----
+
+## 5.2 LC ------
+### 5.2.1 avec les levées d'écrou (modif aménagement et date) ------
+suivi_ap <- suivi_ap[, `:=`(
+  AMENAGEMENT = fcase(
+    is.na(AMENAGEMENT) & LEVEECR_LC == 1, "LC", 
+    !is.na(AMENAGEMENT), AMENAGEMENT,
+    default = "Non_AP")
+)]
+## modif date
+suivi_ap <- suivi_ap[AMENAGEMENT == "LC", `:=`(
+  DT_DBT_AP = DT_LEVEECR,
+  DT_FIN_AP = DT_FIN_PEINE
+  )]
+## crée une variable générale
+suivi_ap <- suivi_ap[, `:=`(
+  AP = fifelse(AMENAGEMENT == "Non_AP",0,1)
+)]
+
+### 5.2.2. dans les mesures -----
 ## 30150 30160 30520 (REVOCATION TOTALE LC)
 
 ## 5.3 Export -----
-
+### 5.3.1 Aménagement a la mise sous écrou + filtre ----
+suivi_ap <- suivi_ap[, `:=`(
+  AMENAGEMENT_MSE = fifelse(DT_DBT_AP <=  DT_ECROU_INITIAL + days(7) & !is.na(DT_DBT_AP), 1, 0),
+  DT_LIBE_PREV = NULL,
+  CD_MOTIF_MOUVEMENT = NULL,
+  DT_LEVEECR = NULL,
+  LEVEECR_LC = NULL 
+)]
+### 5.3.2. Parquet
+write_parquet(suivi_ap,paste0(path,"Export/suivi_ap.parquet"))
 
 # 6. Premières analyses -----
 ## 6.1. Analyse de survie (Larmarange) -----
 ## https://larmarange.github.io/analyse-R/analyse-de-survie.html
-### 5.1.1. Import -----
-
+### 5.1.1. Import hors aménagement à la mise sous écrou -----
+suivi_ap <-  open_dataset(paste0(path,"Export/suivi_ap.parquet"))
+suivi_ap <- data.table(suivi_ap)
+suivi_ap <- suivi_ap[AMENAGEMENT_MSE == 0,]
+         
 ### 5.1.2. Variables nécessaires ------
 ## Durée observation
 suivi_ap[, duree_observation := time_length(interval(DT_DBT_ELIG, DT_FIN_ELIG), unit = "months")]
 ## Durée AP + imputer pour éviter égalité avec une décimale
 suivi_ap[, duree_ap := time_length(interval(DT_DBT_ELIG, DT_DBT_AP), unit = "months")]
 suivi_ap[, duree_ap_impute := duree_ap + runif(.N)]
-## Variable de censure
-suivi_ap[, AP := 0]
-suivi_ap[!is.na(AMENAGEMENT), AP := 1]
 ## Temps
 suivi_ap[, time := duree_observation]
 suivi_ap[AP == 1, time := duree_ap_impute]
@@ -489,7 +520,7 @@ suivi_ap[AP == 1, time := duree_ap_impute]
 ## 5.2 Kapman Meier -----
 # https://www.danieldsjoberg.com/ggsurvfit/
 # KM
-p <- ggsurvfit::survfit2(Surv(time, AP) ~ annee_dbt_elig_ap, data = suivi_ap) |>
+p <- ggsurvfit::survfit2(Surv(time, AP) ~ 1, data = suivi_ap) |>
   ggsurvfit(linewidth = 1) +
   add_confidence_interval() +
   add_risktable() +
