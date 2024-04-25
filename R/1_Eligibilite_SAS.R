@@ -503,7 +503,8 @@ write_parquet(suivi_ap,paste0(path,"Export/suivi_ap.parquet"))
 ## 6.1. Analyse de survie (Larmarange) -----
 ## https://larmarange.github.io/analyse-R/analyse-de-survie.html
 ### 5.1.1. Import hors aménagement à la mise sous écrou -----
-suivi_ap <-  open_dataset(paste0(path,"Export/suivi_ap.parquet"))
+suivi_ap <-  open_dataset(paste0(path,"Export/suivi_ap.parquet")) |> 
+  collect()
 suivi_ap <- data.table(suivi_ap)
 suivi_ap <- suivi_ap[AMENAGEMENT_MSE == 0,]
          
@@ -520,7 +521,7 @@ suivi_ap[AP == 1, time := duree_ap_impute]
 ## 5.2 Kapman Meier -----
 # https://www.danieldsjoberg.com/ggsurvfit/
 # KM
-p <- ggsurvfit::survfit2(Surv(time, AP) ~ 1, data = suivi_ap) |>
+p <- ggsurvfit::survfit2(Surv(time, AP) ~ year(DT_DBT_ELIG), data = suivi_ap) |>
   ggsurvfit(linewidth = 1) +
   add_confidence_interval() +
   add_risktable() +
@@ -536,13 +537,13 @@ p +
   )
 
 ## Par type d'aménagement 
-p <- ggsurvfit::survfit2(Surv(time, AMENAGEMENT) ~ annee_dbt_elig_ap , data = suivi_ap) |>
+pAP <- ggsurvfit::survfit2(Surv(time, as.factor(AMENAGEMENT)) ~ 1 , data = suivi_ap) |>
   ggsurvfit(linewidth = 1) +
   add_confidence_interval() +
   add_risktable() +
   add_quantile(y_value = 0.6, color = "gray50", linewidth = 0.75) +
   scale_ggsurvfit()
-p +
+pAP +
   # limit plot to show 24 months and less
   coord_cartesian(xlim = c(0, 24)) +
   # update figure labels/titles
