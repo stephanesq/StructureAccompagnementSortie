@@ -538,7 +538,7 @@ p +
 
 ## Par type d'aménagement 
 pAP <- ggsurvfit::survfit2(Surv(time, as.factor(AMENAGEMENT)) ~ 1 , data = suivi_ap) |>
-  ggsurvfit(linewidth = 1) +
+  ggcuminc(linewidth = 1) +
   add_confidence_interval() +
   add_risktable() +
   add_quantile(y_value = 0.6, color = "gray50", linewidth = 0.75) +

@@ -21,13 +21,15 @@ dt_obs <- ym(paste(an, mois))  # date pour tester photo des écroués en SAS à 
 dt_max <- ym(2310) # AAMM date dernière extraction des bases écoles 
 dt_max_long <- format(dt_max, "%d %B %Y")
 
-path_infpenit <- "~/Documents/Recherche/3_Evaluation/_DATA/INFPENIT"
-path_referentiel <- "~/Documents/Recherche/3_Evaluation/_DATA/Referentiel"
+# chemin ------
+path = paste0(here::here(),"/Donnees/")
+path_dwh = "~/Documents/Recherche/3_Evaluation/_DATA/INFPENIT/"
+path_ref = "~/Documents/Recherche/3_Evaluation/_DATA/Referentiel/"
 
 # memory.limit(size = 18000)
 
 # liste des établissements ouverts (ref_etab) ----
-ref_etab <- read_sas(paste0(path_referentiel, "ref_etab.sas7bdat")) %>% 
+ref_etab <- read_sas(paste0(path_ref, "ref_etab.sas7bdat")) %>% 
   clean_names() %>% 
   filter(year(dt_fermeture) == 9999) %>% 
   select(lc_etab, cd_etablissement)
@@ -39,7 +41,7 @@ ref_etab <- read_sas(paste0(path_referentiel, "ref_etab.sas7bdat")) %>%
 # ont toutes une date d'application au 01/05/2022, même si elles étaient ouvertes avant (en raison
 # de l'arrêté les reconnaissant n'étant pas publié à leurs mises en service). Pour
 # les autres, la date d'application correspond bien à la date de mise en service de la SAS.
-srj_sas_raw <- read_sas("liste_sas.sas7bdat") %>% clean_names()
+srj_sas_raw <- read_sas(paste0(path, "liste_sas.sas7bdat")) %>% clean_names()
 
 srj_sas <- srj_sas_raw %>% 
   mutate(cd_etab_rat = str_c(sprintf("%03d", c_ori_est_rat), sprintf("%05d", nu_est_rat)), # établissement de rattachement
@@ -48,7 +50,7 @@ srj_sas <- srj_sas_raw %>%
 
 # on récupère les identifiants des SAS à partir de t_dwh_h_cellule ----
 if(!exists("cellule")){
-  cellule <- read_sas(paste0(path_referentiel, "t_dwh_h_cellule.sas7bdat")) %>% 
+  cellule <- read_sas(paste0(path_dwh, "t_dwh_h_cellule.sas7bdat")) %>% 
     clean_names() %>% 
     left_join(ref_etab) }
 
@@ -100,7 +102,7 @@ situ_cols <- c('nm_ecrou_init', 'nm_ecrou_courant', 'dt_debut_situ_penit', 'dt_f
                'top_sortie_def', 'top_evade')
 
 if(!exists("situ_penit")){
-  situ_penit  <- read_parquet(str_glue("{path_infpenit}t_dwh_h_situ_penit.parquet"),
+  situ_penit  <- read_parquet(str_glue("{path_dwh}t_dwh_h_situ_penit.parquet"),
                               col_select = toupper(situ_cols)) %>% 
     clean_names() %>% 
     mutate(across(where(is.character), \(x) na_if(x, "NA"))) %>% 
@@ -372,7 +374,7 @@ mouv_cols <- c("nm_ecrou_init", "dt_mouvement_reel", "cd_type_mouvement", "cd_na
                "cd_motif_mouvement", "top_lsc")
 
 if(!exists("mouv_temp")){
-  mouv_temp <- read_parquet(str_glue("{path_infpenit}t_dwh_f_mouvement.parquet"),
+  mouv_temp <- read_parquet(str_glue("{path_dwh}t_dwh_f_mouvement.parquet"),
                             col_select = toupper(mouv_cols)) %>% 
     clean_names() %>% rename(top_lsc_mvt = top_lsc) %>% 
     as.data.table()
