@@ -28,31 +28,96 @@ path_ref = "~/Documents/Recherche/3_Evaluation/_DATA/Referentiel/"
 
 # memory.limit(size = 18000)
 
-# liste des établissements ouverts (ref_etab) ----
+# 1. Liste des SAS ------
+
+## 1.1 liste des établissements ouverts (ref_etab) ----
 ref_etab <- read_sas(paste0(path_ref, "ref_etab.sas7bdat")) %>% 
   clean_names() %>% 
   filter(year(dt_fermeture) == 9999) %>% 
   select(lc_etab, cd_etablissement)
 
-# liste des SAS renseignées dans SRJ (pour date d'application/date d'ouverture) ----
-# programme liste_sas_srj.sas
+## 1.2. liste des SAS renseignées dans SRJ (pour date d'application/date d'ouverture) ----
+# reprise des codes du SRJ qui ont été modifiées dans GENESIS
+
+# liste_sas <- read_sas(paste0(path_ref, "t_dwh_lib_structure.sas7bdat")) |> 
+#   clean_names() |> 
+#   filter(nm_type_structure == 3729) |> 
+#   mutate(lib_sas = paste0(lb_structure_1, lb_structure_2),
+#          .keep = "unused"
+#          ) |> 
+#   rename(c("lc_sas" = "lc_structure",
+#            "c_ori_est" = "cd_orig_structure",
+#            "nu_est" = "nm_structure",
+#            "d_app" = "dt_application",
+#            "c_ori_est_rat" = "cd_orig_structure_rattach", 
+#            "nu_est_rat" = "nm_structure_rattach" 
+#          )) |> 
+#   select(id_structure, c_ori_est, nu_est, lc_sas, lib_sas, d_app, id_structure_rattach, c_ori_est_rat, nu_est_rat)
+# 
+# write_parquet(liste_sas,paste0(path,"Export/liste_sas.parquet"))
+
 
 # sur les dates d'application : les SAS de Marseille, Poitiers, Bordeaux, Longuenesse et Aix
 # ont toutes une date d'application au 01/05/2022, même si elles étaient ouvertes avant (en raison
 # de l'arrêté les reconnaissant n'étant pas publié à leurs mises en service). Pour
 # les autres, la date d'application correspond bien à la date de mise en service de la SAS.
-srj_sas_raw <- read_sas(paste0(path, "liste_sas.sas7bdat")) %>% clean_names()
+srj_sas_raw <- read_parquet(paste0(path, "Export/liste_sas.parquet")) %>% clean_names()
 
 srj_sas <- srj_sas_raw %>% 
-  mutate(cd_etab_rat = str_c(sprintf("%03d", c_ori_est_rat), sprintf("%05d", nu_est_rat)), # établissement de rattachement
-         .keep = "unused") %>% 
-  select(lc_sas, d_app, cd_etab_rat)
+  mutate(cd_etab_sas = str_c(sprintf("%03s", c_ori_est), sprintf("%05s", nu_est)),
+         cd_etab_rat = str_c(sprintf("%03s", c_ori_est_rat), sprintf("%05s", nu_est_rat)), # établissement de rattachement
+         .keep = "unused") %>% #"unused" retains only the columns not used in ... to create new columns. 
+  select(cd_etab_sas, lc_sas, d_app, cd_etab_rat)
 
-# on récupère les identifiants des SAS à partir de t_dwh_h_cellule ----
+rm(srj_sas_raw)
+# write.csv2(srj_sas,"srj_sas.csv")
+
+## 1.3. Info métiers SAS ----
+# récupérer info métiers sur ouverture SAS : date ouverture ; places ; places dédiées SAS ; + taille QSL si existe
+srj_suivi_sas_dap <- readxl::read_xlsx("Documents/Suivi_SAS_SRJ.xlsx") |> 
+  clean_names() |> 
+  select(dt_ouverture, operation, cd_etab_sas, places_prevues, places_prevues_sas, qsl) |> 
+  mutate(neuve = if_else(operation=="Neuve",1,0),
+         cd_etab_sas = sprintf("%08s", as.character(cd_etab_sas)),
+         .keep = "unused")
+
+#ajout des infos
+srj_sas <- srj_sas |> 
+  left_join(srj_suivi_sas_dap)
+
+rm(srj_suivi_sas_dap)
+
+# 2. Topographie SAS (cellules) ----
+## 2.1. Identifiants des SAS à partir de t_dwh_h_cellule ----
+### 2.1.1. Réduire cette table à un lien cellule/quartier 
 if(!exists("cellule")){
-  cellule <- read_sas(paste0(path_dwh, "t_dwh_h_cellule.sas7bdat")) %>% 
-    clean_names() %>% 
-    left_join(ref_etab) }
+  cellule <- open_dataset(paste0(path_dwh, "t_dwh_h_cellule.parquet")) |> 
+    collect() |> 
+    clean_names() |> 
+    select(-capa_normes_europe,-capa_ope,
+           -dt_modification,-id_audit,
+           -effectif_present,-effectif_theo_affecte,-nb_lits,-effectif_absent, -effectif_sl_absent,
+           -fl_fumeur,-fl_pmr,-fl_qm) |> 
+    mutate(across(starts_with("fl_"), ~ if_else(.==2,NA,as.integer(.)))) |> 
+    mutate(across(where(is.character), ~ if_else( . %in% c("NA","(ND)","(NF)","(NR)"), NA, as.factor(.)))) 
+  
+#réduire le nombre de lignes
+  test <- cellule |> 
+    group_by(id_ugc,capa_theo,fl_femme, fl_mineur, fl_sl,statut_ugc,lc_code) |> 
+    summarise(date_debut = min(date_debut),
+              date_fin = max(date_fin)
+              ) |> 
+    ungroup() |> 
+    group_by(id_ugc) |> mutate(n=n()) |> ungroup()
+  
+  test |> summarise(n = n(), dist_ugc = n_distinct(id_ugc))
+  
+  
+  |> 
+    left_join(ref_etab) 
+  }
+
+test |> summarise(n = n(), dist_ugc = n_distinct(id_ugc))
 
 ## focus SAS MARSEILLE (places manquantes - LE QSL) ---- 
 # redressement du QSL en SAS
