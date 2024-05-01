@@ -90,6 +90,9 @@ rm(srj_suivi_sas_dap)
 # 2. Topographie SAS (cellules) ----
 ## 2.1. Identifiants des SAS à partir de t_dwh_h_cellule ----
 ### 2.1.1. Réduire cette table à un lien cellule/quartier 
+### Redressements :
+### RED1 Flags à 0 si non-renseignés (2)
+### RED2 Fusion  des lignes identiques en fonction de capa_theo,fl_femme, fl_mineur, fl_sl,statut_ugc,lc_code,cd_categ_admin
 if(!exists("cellule")){
   cellule <- open_dataset(paste0(path_dwh, "t_dwh_h_cellule.parquet")) |> 
     collect() |> 
@@ -97,18 +100,47 @@ if(!exists("cellule")){
     select(-capa_normes_europe,-capa_ope,
            -dt_modification,-id_audit,
            -effectif_present,-effectif_theo_affecte,-nb_lits,-effectif_absent, -effectif_sl_absent,
-           -fl_fumeur,-fl_pmr,-fl_qm) |> 
-    mutate(across(starts_with("fl_"), ~ if_else(.==2,NA,as.integer(.)))) |> 
+           -fl_fumeur,-fl_pmr,-fl_qm,
+           -id_ugc_histo,-type) |> 
+    mutate(across(starts_with("fl_"), ~ if_else(.==2,0,as.integer(.)))) |> #remplace les flag non renseignés par défaut à 0
     mutate(across(where(is.character), ~ if_else( . %in% c("NA","(ND)","(NF)","(NR)"), NA, as.factor(.)))) 
   
-#réduire le nombre de lignes
-  test <- cellule |> 
-    group_by(id_ugc,capa_theo,fl_femme, fl_mineur, fl_sl,statut_ugc,lc_code) |> 
-    summarise(date_debut = min(date_debut),
-              date_fin = max(date_fin)
-              ) |> 
-    ungroup() |> 
-    group_by(id_ugc) |> mutate(n=n()) |> ungroup()
+###
+###
+  # fonction pour compter le nb de nm_ecrou_init distincts par SAS et par mois 
+  replace_zero <- function(var){
+    
+    var shift(DT_FIN_SITU_PENIT, 
+              fill=DT_DEBUT_SITU_PENIT[1L], 
+              n=1, 
+              type="lag")    tab_long <- dt[, uniqueN(nm_ecrou_init), 
+                   keyby = .(lc_sas, year(get(var_date)), lubridate::month(get(var_date), label = T))]
+    
+    tab_long
+    tab_large <- dcast(tab_long, lc_sas + year ~ lubridate, fill = 0, value.var = "V1")
+    Total <- tab_large[, rowSums(.SD), .SDcols=-(1:2)]
+    cbind(tab_large, Total)
+  }
+  
+### 2.1.3. Réduire le nombre de lignes
+cellule <- data.table(cellule)
+setkey(cellule,id_ugc)
+
+  test <- cellule[,
+                  .(date_debut = min(date_debut),
+                    date_fin = max(date_fin),
+                    n = .N
+                    ),
+                  by = .(id_ugc,capa_theo,fl_femme, fl_mineur, fl_sl,statut_ugc,lc_code,cd_categ_admin, cd_etablissement)]
+  #comptage des doublons
+  test <- test[ ,n := .N #comptage ligne
+    ,by = .(id_ugc)]
+  #modif si doublon et que information paraît saisie APRES
+  setorder(test,id_ugc,date_debut)
+  test <- test[n>1
+               ,lapply(.SD, replace_zero)
+               ,by = .(id_ugc)
+               ,.SDcols = c("apa_theo","fl_femme", "fl_mineur", "fl_sl")]
   
   test |> summarise(n = n(), dist_ugc = n_distinct(id_ugc))
   
