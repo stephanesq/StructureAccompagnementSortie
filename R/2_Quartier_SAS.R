@@ -103,26 +103,15 @@ if(!exists("cellule")){
            -fl_fumeur,-fl_pmr,-fl_qm,
            -id_ugc_histo,-type) |> 
     mutate(across(starts_with("fl_"), ~ if_else(.==2,0,as.integer(.)))) |> #remplace les flag non renseignés par défaut à 0
-    mutate(across(where(is.character), ~ if_else( . %in% c("NA","(ND)","(NF)","(NR)"), NA, as.factor(.)))) 
-  
-###
-###
-  # fonction pour compter le nb de nm_ecrou_init distincts par SAS et par mois 
-  replace_zero <- function(var){
-    
-    var shift(DT_FIN_SITU_PENIT, 
-              fill=DT_DEBUT_SITU_PENIT[1L], 
-              n=1, 
-              type="lag")    tab_long <- dt[, uniqueN(nm_ecrou_init), 
-                   keyby = .(lc_sas, year(get(var_date)), lubridate::month(get(var_date), label = T))]
-    
-    tab_long
-    tab_large <- dcast(tab_long, lc_sas + year ~ lubridate, fill = 0, value.var = "V1")
-    Total <- tab_large[, rowSums(.SD), .SDcols=-(1:2)]
-    cbind(tab_large, Total)
-  }
-  
+    mutate(across(where(is.character), ~ if_else( . %in% c("NA","(ND)","(NF)","(NR)"), NA, as.factor(.))))   |> 
+    left_join(ref_etab) 
+}
+
 ### 2.1.3. Réduire le nombre de lignes
+### RED1 : pour les flags on vérifie s'il y a un changement de valeur qui se maintient (0,1,1 ou 0,1,0)
+### on regarde les modifs pour un nombre réduit de colonnes
+### RED2 : on ne garde que les observations avec des changements par id_ugc
+### RED3 : on attribue date de fin à la ligne suivante
 cellule <- data.table(cellule)
 setkey(cellule,id_ugc)
 
@@ -137,17 +126,35 @@ setkey(cellule,id_ugc)
     ,by = .(id_ugc)]
   #modif si doublon et que information paraît saisie APRES
   setorder(test,id_ugc,date_debut)
-  test <- test[n>1
-               ,lapply(.SD, replace_zero)
+
+#RED1 : récupère lead1 et lead2  
+col_remplies <- c("capa_theo","fl_femme", "fl_mineur", "fl_sl")
+##lead1
+test <- test[n>1
+               ,paste0(col_remplies, "_lead1") := 
+                    lapply(.SD, shift, n=1L, type = "lead") #applique la fonction shift sur les colonnes
                ,by = .(id_ugc)
-               ,.SDcols = c("apa_theo","fl_femme", "fl_mineur", "fl_sl")]
+               ,.SDcols = col_remplies]
+##lead2
+test <- test[n>1 #filtre pour doublons
+             ,paste0(col_remplies, "_lead2") := #modifie nom pour chaque colonne
+               lapply(.SD, shift, n=2L, type = "lead") #applique la fonction shift sur les colonnes
+             #et modifie leur nom
+             ,by = .(id_ugc)
+             ,.SDcols = col_remplies] #traitement que pour colonnes listées
+##redressement
+test2 <- test[n>1
+               ,.SD := fifelse(
+                 .SD == 0 &
+                 (paste0(col_remplies, "_lead1") == 1 & paste0(col_remplies, "_lead2") == 1 )
+                 | (paste0(col_remplies, "_lead1") == 1 & is.na(paste0(col_remplies, "_lead2")) ) 
+                 ,paste0(col_remplies, "_lead1")
+                 ,col_remplies )
+               ,by = .(id_ugc)
+             ,.SDcols = col_remplies]
+##lead2         
   
-  test |> summarise(n = n(), dist_ugc = n_distinct(id_ugc))
-  
-  
-  |> 
-    left_join(ref_etab) 
-  }
+
 
 test |> summarise(n = n(), dist_ugc = n_distinct(id_ugc))
 
