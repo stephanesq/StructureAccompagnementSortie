@@ -30,11 +30,14 @@ path_ref = "~/Documents/Recherche/3_Evaluation/_DATA/Referentiel/"
 
 # 1. Liste des SAS ------
 
-## 1.1 liste des établissements ouverts (ref_etab) ----
-ref_etab <- read_sas(paste0(path_ref, "ref_etab.sas7bdat")) %>% 
-  clean_names() %>% 
-  filter(year(dt_fermeture) == 9999) %>% 
-  select(lc_etab, cd_etablissement)
+## 1.1 liste des établissements historisés (ref_etab) ----
+## libellé ouvert si plusieurs
+ref_etab <- read_sas(paste0(path_ref, "ref_etab_historisee.sas7bdat")) |>  
+  clean_names() |> 
+  arrange(cd_etablissement,desc(dt_fermeture),desc(dt_disp)) |> 
+    group_by(cd_etablissement) |> 
+    slice(1) |> 
+  select(cd_etablissement, lc_etab)
 
 ## 1.2. liste des SAS renseignées dans SRJ (pour date d'application/date d'ouverture) ----
 # reprise des codes du SRJ qui ont été modifiées dans GENESIS
@@ -91,6 +94,9 @@ rm(srj_suivi_sas_dap)
 ## 2.1. Identifiants des SAS à partir de t_dwh_h_cellule ----
 ### 2.1.1. Réduire cette table à un lien cellule/quartier 
 ### Redressements :
+### RED0 type_quartier redressé 
+###   si pas etab simple
+###   et étrangeté 00639588
 ### RED1 Flags à NA si non-renseignés (2 initialement)
 ### RED2 Fusion  des lignes identiques en fonction de capa_theo,fl_femme, fl_mineur, fl_sl,statut_ugc,lc_code,cd_categ_admin
 if(!exists("cellule")){
@@ -127,7 +133,8 @@ setkey(cellule,id_ugc)
   #modif si doublon et que information paraît saisie APRES
   setorder(test,id_ugc,date_debut)
 
-ln_type_quartier_detail <- read_sas(paste0(path_ref, "t_dwh_lib_categ_admin.sas7bdat")) 
+  ln_structure<- read_sas(paste0(path_ref, "t_dwh_lib_structure.sas7bdat")) 
+  ln_type_quartier_detail <- read_sas(paste0(path_ref, "t_dwh_lib_categ_admin.sas7bdat")) 
   
 #RED1 : récupère lead1 et lead2  
 col_remplies <- c("capa_theo","fl_femme", "fl_mineur", "fl_sl")
