@@ -91,7 +91,7 @@ rm(srj_suivi_sas_dap)
 ## 2.1. Identifiants des SAS à partir de t_dwh_h_cellule ----
 ### 2.1.1. Réduire cette table à un lien cellule/quartier 
 ### Redressements :
-### RED1 Flags à 0 si non-renseignés (2)
+### RED1 Flags à NA si non-renseignés (2 initialement)
 ### RED2 Fusion  des lignes identiques en fonction de capa_theo,fl_femme, fl_mineur, fl_sl,statut_ugc,lc_code,cd_categ_admin
 if(!exists("cellule")){
   cellule <- open_dataset(paste0(path_dwh, "t_dwh_h_cellule.parquet")) |> 
@@ -102,7 +102,7 @@ if(!exists("cellule")){
            -effectif_present,-effectif_theo_affecte,-nb_lits,-effectif_absent, -effectif_sl_absent,
            -fl_fumeur,-fl_pmr,-fl_qm,
            -id_ugc_histo,-type) |> 
-    mutate(across(starts_with("fl_"), ~ if_else(.==2,0,as.integer(.)))) |> #remplace les flag non renseignés par défaut à 0
+    mutate(across(starts_with("fl_"), ~ if_else(.==2,0, NA, as.integer(.)))) |> #remplace les flag non renseignés par défaut à 0
     mutate(across(where(is.character), ~ if_else( . %in% c("NA","(ND)","(NF)","(NR)"), NA, as.factor(.))))   |> 
     left_join(ref_etab) 
 }
@@ -127,6 +127,8 @@ setkey(cellule,id_ugc)
   #modif si doublon et que information paraît saisie APRES
   setorder(test,id_ugc,date_debut)
 
+ln_type_quartier_detail <- read_sas(paste0(path_ref, "t_dwh_lib_categ_admin.sas7bdat")) 
+  
 #RED1 : récupère lead1 et lead2  
 col_remplies <- c("capa_theo","fl_femme", "fl_mineur", "fl_sl")
 ##lead1
