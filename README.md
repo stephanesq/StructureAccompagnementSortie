@@ -32,7 +32,34 @@ un moyen efficace de lutter contre la récidive.
 
 ## Retour de [l'OIP](https://oip.org/analyse/structures-daccompagnement-vers-la-sortie-de-la-theorie-aux-pratiques/)
 
-# Questions
+# Questions évaluatives
+
+### **Question1 - Améliorer le recours aux aménagements de peine** 
+
+-   Porte sur : l'efficacité de la politique (adéquation des effets au
+    regard des objectifs)
+
+-   Jugée efficace si : le taux d'aménagement de peine en SAS est
+    supérieur à celui hors SAS
+
+-   Difficultés :
+
+    -   Evolution
+
+### Question2 -**Faire bénéficier les aménagements à un public éloigné de ces dispositifs**
+
+-   Si des publics ne bénéficiant pas d'aménagement habituellement sont
+    orientés en SAS
+
+-   Porte sur le déploiement et mise en œuvre de la politique publique
+
+### **Question3 - Faciliter les permisssions de sortie**
+
+-   **L**e déploiement et mise en œuvre de la politique
+    publique                                              
+
+-   Si les permissions de sorties des personnes en SAS sont supérieurs à
+    celles hors SAS 
 
 # Organisation du programme de travail
 
