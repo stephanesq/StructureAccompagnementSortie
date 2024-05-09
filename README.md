@@ -44,7 +44,7 @@ un moyen efficace de lutter contre la récidive.
 
 -   Difficultés :
 
-    -   Evolution
+    -   Evolution avant/après
 
 ### Question2 -**Faire bénéficier les aménagements à un public éloigné de ces dispositifs**
 
@@ -95,3 +95,19 @@ SAS.
 Deux incertitudes : - L’identification des SAS dans Genesis est-elle
 suffisamment propre ? - L’identification des aménagements de peine dans
 Genesis est-elle suffisamment propre ?
+
+### Difficultés modélisation
+
+-   Variations
+
+    -   Implantation varie dans le temps (staggered did ?)
+
+    -   Organisation locale
+
+    -   QPA en SAS vs. nouvelles SAS
+
+    -   CP avec SAS vs. établissement non-mixte
+
+-   GEstion des places SL
+
+-   
