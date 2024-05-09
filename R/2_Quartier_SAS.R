@@ -115,9 +115,11 @@ rm(srj_suivi_sas_dap)
 ### 2.1.1. Réduire cette table à un lien cellule/quartier 
 ### Redressements :
 ### RED0 type_quartier redressé 
-###   si pas etab simple
+###   RED0.1 EPSN que si Fresnes  (MA ou CP, 00101675,00637851)
 ### RED1 Flags à NA si non-renseignés (2 initialement)
-###   RED1.1 si cd_type_hebergement==SL => fl_sl ==1
+###   RED1.1 fl_hors_capa = cellule hors capacité (détenus liés à une cellule "normale")
+###   RED1.2 si cd_type_hebergement==SL => fl_sl ==1
+###   RED1.3 fl_femme ==1 : si cellule avec "_F"
 ### RED2 Fusion  des lignes identiques en fonction de capa_theo,fl_femme, fl_mineur, fl_sl,statut_ugc,lc_code,cd_categ_admin
 ### RED3.1 Indic indisponible (fl_indisp) à partir du statut_ugc AI ou I 
 ### RED3.2 Si inoccupable, alors capa = 0
@@ -132,12 +134,17 @@ if(!exists("cellule")){
            -id_ugc_histo,-type) |> 
     mutate(across(starts_with("fl_"), ~ if_else(.==2,NA, as.integer(.)))) |> #RED1
     mutate(across(where(is.character), ~ if_else( . %in% c("NA","(ND)","(NF)","(NR)"), NA, as.factor(.))))   |> 
-    mutate(fl_speciale = if_else(cd_type_hebergement %in% c("DISC","ISOL","NURS","QCP","QPR","SMPR","UDV","UHSA","UHSI","UVF"),1,0), #identifier des places sans hébergement / dépendent pas de quartier
+    mutate(cd_type_hebergement = if_else(cd_type_hebergement == "EPSN" & 
+                                           !(cd_etablissement %in% c("00101675","00637851"))
+                                         ,"NORM"
+                                         ,cd_type_hebergement), #RED0.1
+           fl_hors_capa = if_else(cd_type_hebergement %in% c("DISC","ISOL","NURS","QCP","QPR","SMPR","UDV","UHSA","UHSI","UVF"),1,0), #identifier des places sans hébergement / dépendent pas de quartier
            fl_sl=if_else(cd_type_hebergement == "SL"| #
-                           (cd_type_etab == "CSL" & fl_speciale == 0) | #centre de SL     
-                           (str_detect(lc_code,"SL") & fl_speciale == 0) #mention SL dans le nom sauf si info incohérente (discipline)
+                           (cd_type_etab == "CSL" & fl_hors_capa == 0) | #centre de SL     
+                           (str_detect(lc_code,"SL") & fl_hors_capa == 0) #mention SL dans le nom sauf si info incohérente (discipline)
                             ,1
                             ,fl_sl),
+           fl_femme = if_else(str_detect(lc_code,"_F$"),1,fl_femme), #RED1.3
            fl_indisp = if_else(statut_ugc %in% c("AI","I"),1,0), #RED3.1
            capa_theo = if_else(fl_indisp == 1,0, capa_theo) #RED3.2
            ) |> 
