@@ -37,7 +37,7 @@ ref_etab <- read_sas(paste0(path_ref, "ref_etab_historisee.sas7bdat")) |>
   arrange(cd_etablissement,desc(dt_fermeture),desc(dt_disp)) |> 
     group_by(cd_etablissement) |> 
     slice(1) |> 
-  select(cd_etablissement, lc_etab)
+  select(cd_etablissement, type_etab, lc_etab)
 
 ## 1.2. liste des SAS renseignées dans SRJ (pour date d'application/date d'ouverture) ----
 # reprise des codes du SRJ qui ont été modifiées dans GENESIS
@@ -92,13 +92,35 @@ rm(srj_suivi_sas_dap)
 
 # 2. Topographie SAS (cellules) ----
 ## 2.1. Identifiants des SAS à partir de t_dwh_h_cellule ----
+## Rappel cd_categ_admin (REG_UGC_10 de l'IP) : 
+##  3 parties, type de quartiers + type de cellules + type de détenu
+#REG_UGC_10_1 Type de quartier
+#   Si le type d'établissement est 'MA', 'CD', 'MC', 'CSL' ou 'EPM', alors CD_CATEG_ADMIN commence par le code type établissement.
+#   Sinon, si le type d'établissement est 'CP' ou 'CPA':
+#     Si le code type hébergement est 'EPSN', alors CD_CATEG_ADMIN commence par 'QEPSN'.
+#     Sinon, CD_CATEG_ADMIN commence par le code type de quartier (champ TYPE_QUARTIER de la source). 
+#     Si la valeur est 'ND', elle est insérée sans changement et les traitements sont arrêtés.
+#REG_UGC_10_2 Type de cellule
+#     Si la catégorie administrative n'est pas 'CSL', 'QEPSN' ou 'ND':
+#       Si le code type hébergement est 'CNO' ou 'CNE', alors CD_CATEG_ADMIN est complété par 'CNO' ou 'CNE'.
+#       Si le code type hébergement est 'SMPR', alors CD_CATEG_ADMIN est complété par 'SMP'.
+#       Si le code type hébergement est 'Semi-Liberté' et la catégorie administrative n'est pas 'QCSL', alors CD_CATEG_ADMIN est complété par 'SL'.
+#       Sinon, si le flag indicateur de Semi-liberté (FL_SL) vaut 1 et la catégorie administrative n'est pas 'QCSL', alors CD_CATEG_ADMIN est complété par 'SL'.
+#REG_UGC_10_3 Type de détenu (H/F/Mineur)
+#     Si la catégorie administrative n'est pas 'ND' et le type d’établissement n’est pas 'EPM':
+#       Si le flag quartier mineur (FL_QM) ou le flag indicateur de Place Mineurs (FL_MINEUR) vaut 1, alors CD_CATEG_ADMIN est complété par 'M'.
+#     Si la catégorie administrative n'est pas 'ND':
+#       Si le flag indicateur de Places Femmes (FL_FEMME) vaut 1, alors CD_CATEG_ADMIN est complété par 'F'.
+#       Sinon, CD_CATEG_ADMIN est complété par 'H'.
 ### 2.1.1. Réduire cette table à un lien cellule/quartier 
 ### Redressements :
 ### RED0 type_quartier redressé 
 ###   si pas etab simple
-###   et étrangeté 00639588
 ### RED1 Flags à NA si non-renseignés (2 initialement)
+###   RED1.1 si cd_type_hebergement==SL => fl_sl ==1
 ### RED2 Fusion  des lignes identiques en fonction de capa_theo,fl_femme, fl_mineur, fl_sl,statut_ugc,lc_code,cd_categ_admin
+### RED3.1 Indic indisponible (fl_indisp) à partir du statut_ugc AI ou I 
+### RED3.2 Si inoccupable, alors capa = 0
 if(!exists("cellule")){
   cellule <- open_dataset(paste0(path_dwh, "t_dwh_h_cellule.parquet")) |> 
     collect() |> 
@@ -108,8 +130,18 @@ if(!exists("cellule")){
            -effectif_present,-effectif_theo_affecte,-nb_lits,-effectif_absent, -effectif_sl_absent,
            -fl_fumeur,-fl_pmr,-fl_qm,
            -id_ugc_histo,-type) |> 
-    mutate(across(starts_with("fl_"), ~ if_else(.==2,0, NA, as.integer(.)))) |> #remplace les flag non renseignés par défaut à 0
+    mutate(across(starts_with("fl_"), ~ if_else(.==2,NA, as.integer(.)))) |> #RED1
     mutate(across(where(is.character), ~ if_else( . %in% c("NA","(ND)","(NF)","(NR)"), NA, as.factor(.))))   |> 
+    mutate(fl_speciale = if_else(cd_type_hebergement %in% c("DISC","ISOL","NURS","QCP","QPR","SMPR","UDV","UHSA","UHSI","UVF"),1,0), #identifier des places sans hébergement / dépendent pas de quartier
+           fl_sl=if_else(cd_type_hebergement == "SL"| #
+                           (cd_type_etab == "CSL" & fl_speciale == 0) | #centre de SL     
+                           (str_detect(lc_code,"SL") & fl_speciale == 0) #mention SL dans le nom sauf si info incohérente (discipline)
+                            ,1
+                            ,fl_sl),
+           fl_indisp = if_else(statut_ugc %in% c("AI","I"),1,0), #RED3.1
+           capa_theo = if_else(fl_indisp == 1,0, capa_theo) #RED3.2
+           ) |> 
+    select(-statut_ugc) |> 
     left_join(ref_etab) 
 }
 
@@ -126,7 +158,7 @@ setkey(cellule,id_ugc)
                     date_fin = max(date_fin),
                     n = .N
                     ),
-                  by = .(id_ugc,capa_theo,fl_femme, fl_mineur, fl_sl,statut_ugc,lc_code,cd_categ_admin, cd_etablissement)]
+                  by = .(id_ugc,capa_theo,fl_femme, fl_mineur, fl_sl,fl_indisp,lc_code,cd_categ_admin, cd_etablissement)]
   #comptage des doublons
   test <- test[ ,n := .N #comptage ligne
     ,by = .(id_ugc)]
