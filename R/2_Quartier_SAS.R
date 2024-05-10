@@ -23,6 +23,7 @@ dt_max_long <- format(dt_max, "%d %B %Y")
 
 # chemin ------
 path = paste0(here::here(),"/Donnees/")
+path_data = "~/Documents/Recherche/3_Evaluation/_DATA/"
 path_dwh = "~/Documents/Recherche/3_Evaluation/_DATA/INFPENIT/"
 path_ref = "~/Documents/Recherche/3_Evaluation/_DATA/Referentiel/"
 
@@ -30,7 +31,7 @@ path_ref = "~/Documents/Recherche/3_Evaluation/_DATA/Referentiel/"
 
 # 1. Liste des SAS ------
 
-## 1.1 liste des établissements historisés (ref_etab) ----
+## 1.1 liste des établissements historisés (ref_etab) + capacite ----
 ## libellé ouvert si plusieurs
 ref_etab <- read_sas(paste0(path_ref, "ref_etab_historisee.sas7bdat")) |>  
   clean_names() |> 
@@ -38,6 +39,15 @@ ref_etab <- read_sas(paste0(path_ref, "ref_etab_historisee.sas7bdat")) |>
     group_by(cd_etablissement) |> 
     slice(1) |> 
   select(cd_etablissement, type_etab, lc_etab)
+
+## Liste places ope (SP2)
+histo_capa_etab <- openxlsx::read.xlsx(paste0(path_data,"AUTRES/Places/capa_ope_sp2_histo.xlsx")) |> 
+  clean_names() |> 
+  select(-disp,-etablissement,-lc_etab,-lc_disp,-lc_spip,-type_etab) |> 
+  mutate(dt_mois = janitor::excel_numeric_to_date(dt_mois))
+### liste etab avec places femmes
+histo_etab_femme <- histo_capa_etab |> filter(places_theo_f > 0) |> select(cd_etablissement) |> distinct()
+
 
 ## 1.2. liste des SAS renseignées dans SRJ (pour date d'application/date d'ouverture) ----
 # reprise des codes du SRJ qui ont été modifiées dans GENESIS
@@ -119,7 +129,9 @@ rm(srj_suivi_sas_dap)
 ### RED1 Flags à NA si non-renseignés (2 initialement)
 ###   RED1.1 fl_hors_capa = cellule hors capacité (détenus liés à une cellule "normale")
 ###   RED1.2 si cd_type_hebergement==SL => fl_sl ==1
-###   RED1.3 fl_femme ==1 : si cellule avec "_F" et établissements accueillant des femmes
+###   RED1.3 A AMELIORER : selon les lettres/chiffres ensuite
+###          fl_femme ==1 : si cellule avec "_F" et établissements accueillant des femmes
+###     
 ### RED2 Fusion  des lignes identiques en fonction de capa_theo,fl_femme, fl_mineur, fl_sl,statut_ugc,lc_code,cd_categ_admin
 ### RED3.1 Indic indisponible (fl_indisp) à partir du statut_ugc AI ou I 
 ### RED3.2 Si inoccupable, alors capa = 0
@@ -144,7 +156,7 @@ if(!exists("cellule")){
                            (str_detect(lc_code,"SL") & fl_hors_capa == 0) #mention SL dans le nom sauf si info incohérente (discipline)
                             ,1
                             ,fl_sl),
-           # fl_femme = if_else(str_detect(lc_code,"QF"),1,fl_femme), #RED1.3
+           fl_femme = if_else(str_detect(lc_code,"QF") & cd_etablissement %in% histo_etab_femme$cd_etablissement,1,fl_femme), #RED1.3
            fl_indisp = if_else(statut_ugc %in% c("AI","I"),1,0), #RED3.1
            capa_theo = case_when(fl_indisp == 1 ~ 0, 
                                  capa_ope > capa_theo ~ capa_ope,
