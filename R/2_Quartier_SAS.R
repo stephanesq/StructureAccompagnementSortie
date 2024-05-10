@@ -93,7 +93,7 @@ rm(srj_suivi_sas_dap)
 # 2. Topographie SAS (cellules) ----
 ## 2.1. Identifiants des SAS à partir de t_dwh_h_cellule ----
 ## Rappel cd_categ_admin (REG_UGC_10 de l'IP) : 
-##  3 parties, type de quartiers + type de cellules + type de détenu
+##  3 parties, type de quartiers + type de cellules (SL/SMPR/..) + type de détenu
 #REG_UGC_10_1 Type de quartier
 #   Si le type d'établissement est 'MA', 'CD', 'MC', 'CSL' ou 'EPM', alors CD_CATEG_ADMIN commence par le code type établissement.
 #   Sinon, si le type d'établissement est 'CP' ou 'CPA':
@@ -119,7 +119,7 @@ rm(srj_suivi_sas_dap)
 ### RED1 Flags à NA si non-renseignés (2 initialement)
 ###   RED1.1 fl_hors_capa = cellule hors capacité (détenus liés à une cellule "normale")
 ###   RED1.2 si cd_type_hebergement==SL => fl_sl ==1
-###   RED1.3 fl_femme ==1 : si cellule avec "_F"
+###   RED1.3 fl_femme ==1 : si cellule avec "_F" et établissements accueillant des femmes
 ### RED2 Fusion  des lignes identiques en fonction de capa_theo,fl_femme, fl_mineur, fl_sl,statut_ugc,lc_code,cd_categ_admin
 ### RED3.1 Indic indisponible (fl_indisp) à partir du statut_ugc AI ou I 
 ### RED3.2 Si inoccupable, alors capa = 0
@@ -127,7 +127,7 @@ if(!exists("cellule")){
   cellule <- open_dataset(paste0(path_dwh, "t_dwh_h_cellule.parquet")) |> 
     collect() |> 
     clean_names() |> 
-    select(-capa_normes_europe,-capa_ope,
+    select(-capa_normes_europe,
            -dt_modification,-id_audit,
            -effectif_present,-effectif_theo_affecte,-nb_lits,-effectif_absent, -effectif_sl_absent,
            -fl_fumeur,-fl_pmr,-fl_qm,
@@ -144,9 +144,11 @@ if(!exists("cellule")){
                            (str_detect(lc_code,"SL") & fl_hors_capa == 0) #mention SL dans le nom sauf si info incohérente (discipline)
                             ,1
                             ,fl_sl),
-           fl_femme = if_else(str_detect(lc_code,"_F$"),1,fl_femme), #RED1.3
+           # fl_femme = if_else(str_detect(lc_code,"QF"),1,fl_femme), #RED1.3
            fl_indisp = if_else(statut_ugc %in% c("AI","I"),1,0), #RED3.1
-           capa_theo = if_else(fl_indisp == 1,0, capa_theo) #RED3.2
+           capa_theo = case_when(fl_indisp == 1 ~ 0, 
+                                 capa_ope > capa_theo ~ capa_ope,
+                                 .default = capa_theo) #RED3.2
            ) |> 
     select(-statut_ugc) |> 
     left_join(ref_etab) 
