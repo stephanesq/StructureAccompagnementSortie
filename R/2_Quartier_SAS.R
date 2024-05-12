@@ -31,24 +31,41 @@ path_ref = "~/Documents/Recherche/3_Evaluation/_DATA/Referentiel/"
 
 # 1. Liste des SAS ------
 
+# Récupérer établissement puis ajouter caractéristiques selon types de détenu accueillis (SP2)
+# Identifier code SRJ des structures SAS
+# Associer cette liste avec date ouverture (redressée) à l'établissement
+
 ## 1.1 liste des établissements historisés (ref_etab) + capacite ----
-## libellé ouvert si plusieurs
+### 1.1.1. dernier libellé ouvert si plusieurs -----
 ref_etab <- read_sas(paste0(path_ref, "ref_etab_historisee.sas7bdat")) |>  
   clean_names() |> 
   arrange(cd_etablissement,desc(dt_fermeture),desc(dt_disp)) |> 
     group_by(cd_etablissement) |> 
     slice(1) |> 
-  select(cd_etablissement, type_etab, lc_etab)
+  select(cd_etablissement, type_etab, lc_etab, dt_fermeture)
 
-## Liste places ope (SP2)
+### 1.1.2. Liste places ope (SP2) ------
 histo_capa_etab <- openxlsx::read.xlsx(paste0(path_data,"AUTRES/Places/capa_ope_sp2_histo.xlsx")) |> 
   clean_names() |> 
   select(-disp,-etablissement,-lc_etab,-lc_disp,-lc_spip,-type_etab) |> 
   mutate(dt_mois = janitor::excel_numeric_to_date(dt_mois))
+
 ### liste etab avec places femmes
 histo_etab_femme <- histo_capa_etab |> filter(places_theo_f > 0) |> select(cd_etablissement) |> distinct()
+histo_etab_mineurs <- histo_capa_etab |> filter(places_ope_min > 0) |> select(cd_etablissement) |> distinct()
+histo_etab_sl <- histo_capa_etab |> filter(places_sl > 0) |> select(cd_etablissement) |> distinct()
+### année minimal de renseignement
+histo_capa_annee_min <- min(year(histo_capa_etab$dt_mois))
 
+### 1.1.3. Etablissement à caractéristiques
+### 
+ref_etab <- ref_etab |> 
+  mutate(fl_qf = if_else(cd_etablissement %in% histo_etab_femme$cd_etablissement, 1,0),
+         fl_qm = if_else(cd_etablissement %in% histo_etab_mineurs$cd_etablissement, 1,0),
+         fl_qsl = if_else(cd_etablissement %in% histo_etab_sl$cd_etablissement, 1,0)) |> 
+  mutate(across(starts_with("fl_"), ~ ifelse(year(dt_fermeture) < histo_capa_annee_min, NA, .))) #capa renseigné à partir de 
 
+rm(histo_capa_etab,histo_etab_femme,histo_etab_mineurs,histo_etab_sl)
 ## 1.2. liste des SAS renseignées dans SRJ (pour date d'application/date d'ouverture) ----
 # reprise des codes du SRJ qui ont été modifiées dans GENESIS
 
@@ -130,11 +147,20 @@ rm(srj_suivi_sas_dap)
 ###   RED1.1 fl_hors_capa = cellule hors capacité (détenus liés à une cellule "normale")
 ###   RED1.2 si cd_type_hebergement==SL => fl_sl ==1
 ###   RED1.3 A AMELIORER : selon les lettres/chiffres ensuite
-###          fl_femme ==1 : si cellule avec "_F" et établissements accueillant des femmes
+###          fl_femme ==1 : si cellule avec "QF" et établissements accueillant des femmes
+###   RED1.4 A AMELIORER 
+###          fl_mineur ==1 : si cellule avec "QF" et établissements accueillant des femmes
 ###     
 ### RED2 Fusion  des lignes identiques en fonction de capa_theo,fl_femme, fl_mineur, fl_sl,statut_ugc,lc_code,cd_categ_admin
-### RED3.1 Indic indisponible (fl_indisp) à partir du statut_ugc AI ou I 
-### RED3.2 Si inoccupable, alors capa = 0
+### 
+### RED3.1 Indic indisponible (fl_indisp) à partir du statut_ugc AI ou I
+### RED4 Capacité théorique 
+###   RED4.1 Si inoccupable, alors capa = 0
+###   RED4.2 Capa théorique >= capa ope max de l'ugc
+### RED5 Recalcul cd_type_hebergement
+###   RED5.1 cd_type_quartier selon type étab non-mixte (pas CP) sinon NA 
+###   RED5.2 cd_type_quartier selon libellé ugc
+###   RED5.3 recalcul d
 if(!exists("cellule")){
   cellule <- open_dataset(paste0(path_dwh, "t_dwh_h_cellule.parquet")) |> 
     collect() |> 
@@ -144,26 +170,64 @@ if(!exists("cellule")){
            -effectif_present,-effectif_theo_affecte,-nb_lits,-effectif_absent, -effectif_sl_absent,
            -fl_fumeur,-fl_pmr,-fl_qm,
            -id_ugc_histo,-type) |> 
-    mutate(across(starts_with("fl_"), ~ if_else(.==2,NA, as.integer(.)))) |> #RED1
+    mutate(across(starts_with("fl_"), ~ if_else(.==2,NA, as.double(.)))) |> #RED1
     mutate(across(where(is.character), ~ if_else( . %in% c("NA","(ND)","(NF)","(NR)"), NA, as.factor(.))))   |> 
     mutate(cd_type_hebergement = if_else(cd_type_hebergement == "EPSN" & 
                                            !(cd_etablissement %in% c("00101675","00637851"))
                                          ,"NORM"
                                          ,cd_type_hebergement), #RED0.1
            fl_hors_capa = if_else(cd_type_hebergement %in% c("DISC","ISOL","NURS","QCP","QPR","SMPR","UDV","UHSA","UHSI","UVF"),1,0), #identifier des places sans hébergement / dépendent pas de quartier
-           fl_sl=if_else(cd_type_hebergement == "SL"| #
+           fl_indisp = if_else(statut_ugc %in% c("AI","I"),1,0) #RED3.1
+           ) |> 
+    select(-statut_ugc)
+
+  # modif selon types de places et informations sur places dispo (ref_etab et capa de SP2)
+  cellule <- cellule |> 
+    left_join(ref_etab |> 
+                select(-dt_fermeture)
+              ) |> 
+    mutate(fl_sl=if_else(cd_type_hebergement == "SL"| #
                            (cd_type_etab == "CSL" & fl_hors_capa == 0) | #centre de SL     
                            (str_detect(lc_code,"SL") & fl_hors_capa == 0) #mention SL dans le nom sauf si info incohérente (discipline)
                             ,1
                             ,fl_sl),
-           fl_femme = if_else(str_detect(lc_code,"QF") & cd_etablissement %in% histo_etab_femme$cd_etablissement,1,fl_femme), #RED1.3
-           fl_indisp = if_else(statut_ugc %in% c("AI","I"),1,0), #RED3.1
-           capa_theo = case_when(fl_indisp == 1 ~ 0, 
-                                 capa_ope > capa_theo ~ capa_ope,
-                                 .default = capa_theo) #RED3.2
-           ) |> 
-    select(-statut_ugc) |> 
-    left_join(ref_etab) 
+           fl_femme = if_else(str_detect(lc_code,"QF") & fl_qf == 1 ,1,fl_femme), #RED1.3
+           fl_mineur = if_else(str_detect(lc_code,"QM|QI") & fl_qm == 1 ,1,fl_mineur) #RED1.3
+    ) |> 
+    select(-fl_qf,-fl_qm, -fl_qsl)
+  
+  #RED4 Modif capa théorique
+  cellule <- cellule |> 
+    group_by(id_ugc) |> 
+      mutate(capa_ope_max = max(capa_ope, na.rm = T)) |> 
+    ungroup() |> 
+    mutate(capa_theo = case_when(fl_indisp == 1 ~ 0, #RED4.1
+                                 capa_ope_max > capa_theo ~ capa_ope_max, #RED4.2
+                                 .default = capa_theo))
+  
+  #RED5 Recalcul
+  cellule <- cellule |> 
+    mutate(across(starts_with("fl_"), ~ if_else(.==NA,0,.))) |> #NA to 0
+    mutate(cd_type_quartier_etab = if_else(type_etab == "CP", NA,
+                                           paste0(type_etab,"/Q",type_etab)), #RED5.1
+           cd_type_quartier_lib_ugc = case_when(str_detect(lc_code,"SAS") ~ "SAS",
+                                                str_detect(lc_code,"QPA") ~ "CPA/QPA",
+                                                str_detect(lc_code,"MC") ~ "MC/QMC",
+                                                str_detect(lc_code,"CD") ~ "CD/QCD",
+                                                str_detect(lc_code,"MA") ~ "MA/QMA",
+                                                str_detect(lc_code,"SL") ~ "CSL/QSL",
+                                                .default = "AUT"), #RED5.2
+           fl_smpr = if_else(str_detect(lc_code,"SMPR")|cd_type_hebergement == "SMPR", 1, 0),
+           fl_epsn = if_else(str_detect(lc_code,"EPSN")|cd_type_hebergement == "EPSN", 1, 0),
+           fl_uhsi = if_else(str_detect(lc_code,"UHSI")|cd_type_hebergement == "UHSI", 1, 0),
+           fl_uhsa = if_else(str_detect(lc_code,"UHSA")|cd_type_hebergement == "UHSA", 1, 0),
+           fl_cne = if_else(str_detect(lc_code,"CNE")|cd_type_hebergement == "CNE", 1, 0),
+           cd_type_quartier_red = case_when(is.na(cd_type_quartier_etab) & is.na(cd_type_quartier) ~ cd_type_quartier_lib_ugc, 
+                                            is.na(cd_type_quartier_etab) ~ cd_type_quartier, 
+                                            .default = cd_type_quartier_etab) #RED5.3
+           
+           )
+    
 }
 
 ### 2.1.3. Réduire le nombre de lignes
