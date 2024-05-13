@@ -57,7 +57,7 @@ histo_etab_sl <- histo_capa_etab |> filter(places_sl > 0) |> select(cd_etablisse
 ### année minimal de renseignement
 histo_capa_annee_min <- min(year(histo_capa_etab$dt_mois))
 
-### 1.1.3. Etablissement à caractéristiques
+### 1.1.3. Etablissement à caractéristiques ----
 ### 
 ref_etab <- ref_etab |> 
   mutate(fl_qf = if_else(cd_etablissement %in% histo_etab_femme$cd_etablissement, 1,0),
@@ -65,7 +65,12 @@ ref_etab <- ref_etab |>
          fl_qsl = if_else(cd_etablissement %in% histo_etab_sl$cd_etablissement, 1,0)) |> 
   mutate(across(starts_with("fl_"), ~ ifelse(year(dt_fermeture) < histo_capa_annee_min, NA, .))) #capa renseigné à partir de 
 
+
+### 1.1.4. Export ------
+write_parquet(ref_etab,paste0(path,"Export/ref_etab_fl.parquet"))
+
 rm(histo_capa_etab,histo_etab_femme,histo_etab_mineurs,histo_etab_sl)
+
 ## 1.2. liste des SAS renseignées dans SRJ (pour date d'application/date d'ouverture) ----
 # reprise des codes du SRJ qui ont été modifiées dans GENESIS
 
@@ -139,7 +144,7 @@ rm(srj_suivi_sas_dap)
 #     Si la catégorie administrative n'est pas 'ND':
 #       Si le flag indicateur de Places Femmes (FL_FEMME) vaut 1, alors CD_CATEG_ADMIN est complété par 'F'.
 #       Sinon, CD_CATEG_ADMIN est complété par 'H'.
-### 2.1.1. Réduire cette table à un lien cellule/quartier 
+### 2.1.1. Réduire cette table à un lien cellule/quartier -----
 ### Redressements :
 ### RED0 type_quartier redressé 
 ###   RED0.1 EPSN que si Fresnes  (MA ou CP, 00101675,00637851)
@@ -186,18 +191,9 @@ if(!exists("cellule")){
 
   # modif selon types de places et informations sur places dispo (ref_etab et capa de SP2)
   cellule <- cellule |> 
-    left_join(ref_etab |> 
+    left_join(read_parquet(paste0(path,"Export/ref_etab_fl.parquet")) |> 
                 select(-dt_fermeture)
-              ) |> 
-    mutate(fl_sl=if_else(cd_type_hebergement == "SL"| #
-                           (type_etab == "CSL" & fl_hors_capa == 0) | #centre de SL     
-                           (str_detect(lc_code,"SL") & fl_hors_capa == 0) #mention SL dans le nom sauf si info incohérente (discipline)
-                            ,1
-                            ,fl_sl),
-           fl_femme = if_else(str_detect(lc_code,"QF") & fl_qf == 1 ,1,fl_femme), #RED1.3
-           fl_mineur = if_else(str_detect(lc_code,"QM|QI") & fl_qm == 1 ,1,fl_mineur) #RED1.3
-    ) |> 
-    select(-fl_qf,-fl_qm, -fl_qsl)
+              )
   
   #RED4 Modif capa théorique
   cellule <- cellule |> 
@@ -206,10 +202,11 @@ if(!exists("cellule")){
     ungroup() |> 
     mutate(capa_theo = case_when(fl_indisp == 1 ~ 0, #RED4.1
                                  capa_ope_max > capa_theo ~ capa_ope_max, #RED4.2
-                                 .default = capa_theo))
+                                 .default = capa_theo)) |> 
+    select(-capa_ope_max)
   
   #RED5 Recalcul
-  cellule2 <- cellule |> 
+  cellule <- cellule |> 
     mutate(cd_type_quartier_etab = case_when(type_etab == "CP" ~ NA,
                                              type_etab == "CSL" ~ "CSL/QSL",
                                              type_etab == "EPM" ~ "EPM",
@@ -222,19 +219,34 @@ if(!exists("cellule")){
                                                 str_detect(lc_code,"SL") ~ "CSL/QSL",
                                                 str_detect(lc_code,"SMPR|EPSN|UHSI|UHSA|CNE") ~ "AUT",
                                                 .default = "MA/QMA"), #RED5.2
+           cd_type_quartier_red = case_when(is.na(cd_type_quartier_etab) & is.na(cd_type_quartier) ~ cd_type_quartier_lib_ugc, 
+                                            is.na(cd_type_quartier_etab) ~ cd_type_quartier, 
+                                            .default = cd_type_quartier_etab), #RED5.3
            fl_smpr = if_else(str_detect(lc_code,"SMPR")|cd_type_hebergement == "SMPR", 1, 0),
            fl_epsn = if_else(str_detect(lc_code,"EPSN")|cd_type_hebergement == "EPSN", 1, 0),
            fl_uhsi = if_else(str_detect(lc_code,"UHSI")|cd_type_hebergement == "UHSI", 1, 0),
            fl_uhsa = if_else(str_detect(lc_code,"UHSA")|cd_type_hebergement == "UHSA", 1, 0),
            fl_cne = if_else(str_detect(lc_code,"CNE")|cd_type_hebergement == "CNE", 1, 0),
-           cd_type_quartier_red = case_when(is.na(cd_type_quartier_etab) & is.na(cd_type_quartier) ~ cd_type_quartier_lib_ugc, 
-                                            is.na(cd_type_quartier_etab) ~ cd_type_quartier, 
-                                            .default = cd_type_quartier_etab), #RED5.3
+           fl_sl=if_else(cd_type_hebergement == "SL"| #
+                           (type_etab == "CSL" & fl_hors_capa == 0) | #centre de SL     
+                           (str_detect(lc_code,"SL") & fl_hors_capa == 0) #mention SL dans le nom sauf si info incohérente (discipline)
+                         ,1
+                         ,fl_sl),
            fl_CP = if_else(type_etab == "CP" & !is.na(type_etab),1,0)
            ) |> 
+    ### flage sur types de détenus
+    mutate(fl_femme = if_else(str_detect(lc_code,"QF") & fl_qf == 1 ,1,fl_femme), #RED1.3
+           fl_mineur = if_else(
+             (str_detect(lc_code,"QM|QI") & fl_qm == 1) | cd_type_quartier_red == "EPM"
+             ,1
+             ,fl_mineur) #RED1.3
+           ) |> 
+    select(-fl_qf,-fl_qm, -fl_qsl) |> 
     #Remplace NA par 0
-    mutate(across(starts_with("fl_"), ~ if_else(is.na(.),0,.))) |> #NA to 0 
+    mutate(across(starts_with("fl_"), ~ if_else(is.na(.),0,.))) #NA to 0 
+    
     #jointure avec la table de paramétrage
+    cellule2 <- cellule |> 
     left_join(
       read_sas(paste0(path_ref, "t_dwh_lib_categ_admin.sas7bdat")) |> 
         clean_names() |> 
@@ -245,7 +257,8 @@ if(!exists("cellule")){
                fl_uhsi = if_else(str_detect(cd_categ_admin,"UHSI"), 1, 0),
                fl_uhsa = if_else(str_detect(cd_categ_admin,"UHSA"), 1, 0),
                fl_cne = if_else(str_detect(cd_categ_admin,"CNE"), 1, 0),
-               fl_CP = if_else(substr(cd_categ_admin,1,1) == "Q", 1,0)
+               fl_CP = if_else(substr(cd_categ_admin,1,1) == "Q", 1,0),
+               fl_femme = if_else(str_detect(cd_categ_admin,"F$"), 1, 0)
                ) |> 
         # Adaptation des noms des variables
         rename("cd_categ_admin_red" = "cd_categ_admin",
@@ -255,21 +268,22 @@ if(!exists("cellule")){
   
   test <- cellule2 |> group_by(cd_categ_admin,cd_categ_admin_red) |> summarise(n=n())
   
-# lib_categ_admin <- read_sas(paste0(path_ref, "t_dwh_lib_categ_admin.sas7bdat")) |> 
-#     clean_names() |> 
-#     select(-id_audit,-id_categ_admin, -lb_categ_admin) |> 
-#     # Création des flags manquants
-#     mutate(fl_epsn = if_else(str_detect(cd_categ_admin,"EPSN"), 1, 0),
-#            fl_uhsi = if_else(str_detect(cd_categ_admin,"UHSI"), 1, 0),
-#            fl_uhsa = if_else(str_detect(cd_categ_admin,"UHSA"), 1, 0),
-#            fl_cne = if_else(str_detect(cd_categ_admin,"CNE"), 1, 0),
-#            fl_CP = if_else(substr(cd_categ_admin,1,1) == "Q", 0,1)
-#     ) |> 
-#     # Adaptation des noms des variables
-#     rename("cd_categ_admin_red" = "cd_categ_admin",
-#            "cd_type_quartier_red" = "cd_type_quartier",
-#            "fl_sl" = "fl_semiliberte")
-#   )
+lib_categ_admin <- read_sas(paste0(path_ref, "t_dwh_lib_categ_admin.sas7bdat")) |>
+    clean_names() |>
+    select(-id_audit,-id_categ_admin, -lb_categ_admin) |>
+    # Création des flags manquants
+    mutate(fl_epsn = if_else(str_detect(cd_categ_admin,"EPSN"), 1, 0),
+           fl_uhsi = if_else(str_detect(cd_categ_admin,"UHSI"), 1, 0),
+           fl_uhsa = if_else(str_detect(cd_categ_admin,"UHSA"), 1, 0),
+           fl_cne = if_else(str_detect(cd_categ_admin,"CNE"), 1, 0),
+           fl_CP = if_else(substr(cd_categ_admin,1,1) == "Q", 0,1),
+           fl_femme = if_else(str_detect(cd_categ_admin,"F$"), 1, 0)
+    ) |>
+    # Adaptation des noms des variables
+    rename("cd_categ_admin_red" = "cd_categ_admin",
+           "cd_type_quartier_red" = "cd_type_quartier",
+           "fl_sl" = "fl_semiliberte")
+  
 
     
     
