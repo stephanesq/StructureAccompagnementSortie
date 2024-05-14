@@ -255,18 +255,22 @@ if(!exists("cellule")){
     #jointure avec la table de paramétrage
     cellule2 <- cellule |> 
     left_join(
-      read_sas(paste0(path_ref, "t_dwh_lib_categ_admin.sas7bdat")) |> 
-        clean_names() |> 
-        filter(!str_detect(cd_categ_admin,"CNO")) |> #Supprime mention CNO (ex nom CNE)
-        select(-id_audit,-id_categ_admin, -lb_categ_admin) |> 
+      read_sas(paste0(path_ref, "t_dwh_lib_categ_admin.sas7bdat")) |>
+        clean_names() |>
+        filter(!str_detect(cd_categ_admin,"CNO") &
+                 !(cd_categ_admin %in% c("(ND)","(NF)","(NR)"))
+        ) |> #Supprime mention CNO (ex nom CNE) ou pas renseigné
+        select(-id_audit,-id_categ_admin, -lb_categ_admin) |>
         # Création des flags manquants
         mutate(fl_epsn = if_else(str_detect(cd_categ_admin,"EPSN"), 1, 0),
                fl_uhsi = if_else(str_detect(cd_categ_admin,"UHSI"), 1, 0),
                fl_uhsa = if_else(str_detect(cd_categ_admin,"UHSA"), 1, 0),
                fl_cne = if_else(str_detect(cd_categ_admin,"CNE"), 1, 0),
                fl_CP = if_else(substr(cd_categ_admin,1,1) == "Q", 1,0),
-               fl_femme = if_else(str_detect(cd_categ_admin,"F$"), 1, 0)
-               ) |> 
+               fl_femme = if_else(str_detect(cd_categ_admin,"F$"), 1, 0),
+               fl_mineur = if_else(str_detect(cd_categ_admin,"MF$|MH$|UHSAM|UHSIM"), 1, 0),
+               fl_semiliberte = if_else(str_detect(cd_categ_admin,"SL"), 1, 0)
+        ) |>
         # Adaptation des noms des variables
         rename("cd_categ_admin_red" = "cd_categ_admin",
                "cd_type_quartier_red" = "cd_type_quartier",
@@ -277,16 +281,19 @@ if(!exists("cellule")){
   
 lib_categ_admin <- read_sas(paste0(path_ref, "t_dwh_lib_categ_admin.sas7bdat")) |>
   clean_names() |>
-    filter(!str_detect(cd_categ_admin,"CNO")) |> #Supprime mention CNO (ex nom CNE)
+    filter(!str_detect(cd_categ_admin,"CNO") &
+            !(cd_categ_admin %in% c("(ND)","(NF)","(NR)"))
+              ) |> #Supprime mention CNO (ex nom CNE) ou pas renseigné
   select(-id_audit,-id_categ_admin, -lb_categ_admin) |>
   # Création des flags manquants
   mutate(fl_epsn = if_else(str_detect(cd_categ_admin,"EPSN"), 1, 0),
          fl_uhsi = if_else(str_detect(cd_categ_admin,"UHSI"), 1, 0),
          fl_uhsa = if_else(str_detect(cd_categ_admin,"UHSA"), 1, 0),
          fl_cne = if_else(str_detect(cd_categ_admin,"CNE"), 1, 0),
-         fl_CP = if_else(substr(cd_categ_admin,1,1) == "Q", 0,1),
+         fl_CP = if_else(substr(cd_categ_admin,1,1) == "Q", 1,0),
          fl_femme = if_else(str_detect(cd_categ_admin,"F$"), 1, 0),
-         fl_mineur = if_else(str_detect(cd_categ_admin,"MF$|MH$"), 1, 0)
+         fl_mineur = if_else(str_detect(cd_categ_admin,"MF$|MH$|UHSAM|UHSIM"), 1, 0),
+         fl_semiliberte = if_else(str_detect(cd_categ_admin,"SL"), 1, 0)
     ) |>
     # Adaptation des noms des variables
     rename("cd_categ_admin_red" = "cd_categ_admin",
