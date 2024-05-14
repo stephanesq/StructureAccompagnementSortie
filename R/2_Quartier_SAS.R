@@ -149,7 +149,6 @@ rm(srj_suivi_sas_dap)
 ### RED0 type_quartier redressé 
 ###   RED0.1 EPSN que si Fresnes  (MA ou CP, 00101675,00637851)
 ### RED1 Flags à NA si non-renseignés (2 initialement)
-###   RED1.1 fl_hors_capa = cellule hors capacité (détenus liés à une cellule "normale")
 ###   RED1.2 si cd_type_hebergement==SL => fl_sl ==1
 ###   RED1.3 A AMELIORER : selon les lettres/chiffres ensuite
 ###          fl_femme ==1 : si cellule avec "QF" et établissements accueillant des femmes
@@ -163,8 +162,14 @@ rm(srj_suivi_sas_dap)
 ###   RED4.1 Si inoccupable, alors capa = 0
 ###   RED4.2 Capa théorique >= capa ope max de l'ugc
 ### RED5 Recalcul cd_type_hebergement
-###   RED5.1 cd_type_quartier selon type étab non-mixte (pas CP) sinon NA 
-###   RED5.2 cd_type_quartier selon libellé ugc (défaut MA/QMA)
+###   RED5.1 cd_type_quartier_etab : calculé selon type étab non-mixte (pas CP) sinon NA 
+###   RED5.2 cd_type_quartier_lib_ugc : selon libellé ugc (défaut MA/QMA)
+###   RED5.3 fl_hors_capa = cellule hors capacité (détenus liés à une cellule "normale")
+###   RED5.4 cd_type_quartier_red = 
+###               si fl_hors_capa = 1 -> AUT
+###               si cd_type_quartier_etab est renseigné
+###               si cd_type_quartier (le quartier dont dépend l'ugc) est renseigné
+###               sinon cd_type_quartier_lib_ugc
 ###   RED5.3 recalcul d
 ###   RED5.4 refonte table paramétrage avec fl_cp + type de cellules
 if(!exists("cellule")){
@@ -184,7 +189,6 @@ if(!exists("cellule")){
                                            !(cd_etablissement %in% c("00101675","00637851"))
                                          ,"NORM"
                                          ,cd_type_hebergement), #RED0.1
-           fl_hors_capa = if_else(cd_type_hebergement %in% c("DISC","ISOL","NURS","QCP","QPR","SMPR","UDV","UHSA","UHSI","UVF"),1,0), #identifier des places sans hébergement / dépendent pas de quartier
            fl_indisp = if_else(statut_ugc %in% c("AI","I"),1,0) #RED3.1
            ) |> 
     select(-statut_ugc)
@@ -219,7 +223,12 @@ if(!exists("cellule")){
                                                 str_detect(lc_code,"SL") ~ "CSL/QSL",
                                                 str_detect(lc_code,"SMPR|EPSN|UHSI|UHSA|CNE") ~ "AUT",
                                                 .default = "MA/QMA"), #RED5.2
-           cd_type_quartier_red = case_when(is.na(cd_type_quartier_etab) & is.na(cd_type_quartier) ~ cd_type_quartier_lib_ugc, 
+           fl_hors_capa = if_else(cd_type_hebergement %in% c("DISC","ISOL","NURS","QCP","QPR","UDV","UHSA","UHSI","UVF")|
+                                    str_detect(lc_code,"DISC|ISOL|NURS|QCP|QPR|UDV|UHSA|UHSI|UVF") #SMPR ?
+                                  ,1
+                                  ,0), #identifier des places sans hébergement / dépendent pas de quartier
+           cd_type_quartier_red = case_when(fl_hors_capa == 1 ~ "AUT",
+                                            is.na(cd_type_quartier_etab) & is.na(cd_type_quartier) ~ cd_type_quartier_lib_ugc, 
                                             is.na(cd_type_quartier_etab) ~ cd_type_quartier, 
                                             .default = cd_type_quartier_etab), #RED5.3
            fl_smpr = if_else(str_detect(lc_code,"SMPR")|cd_type_hebergement == "SMPR", 1, 0),
@@ -227,11 +236,9 @@ if(!exists("cellule")){
            fl_uhsi = if_else(str_detect(lc_code,"UHSI")|cd_type_hebergement == "UHSI", 1, 0),
            fl_uhsa = if_else(str_detect(lc_code,"UHSA")|cd_type_hebergement == "UHSA", 1, 0),
            fl_cne = if_else(str_detect(lc_code,"CNE")|cd_type_hebergement == "CNE", 1, 0),
-           fl_sl=if_else(cd_type_hebergement == "SL"| #
-                           (type_etab == "CSL" & fl_hors_capa == 0) | #centre de SL     
-                           (str_detect(lc_code,"SL") & fl_hors_capa == 0) #mention SL dans le nom sauf si info incohérente (discipline)
+           fl_sl=if_else(cd_type_hebergement == "SL"| type_etab == "CSL"|str_detect(lc_code,"SL") 
                          ,1
-                         ,fl_sl),
+                         ,fl_sl), #& fl_hors_capa == 0 ?  si info incohérente (discipline) ?
            fl_CP = if_else(type_etab == "CP" & !is.na(type_etab),1,0)
            ) |> 
     ### flage sur types de détenus
@@ -269,22 +276,28 @@ if(!exists("cellule")){
   test <- cellule2 |> group_by(cd_categ_admin,cd_categ_admin_red) |> summarise(n=n())
   
 lib_categ_admin <- read_sas(paste0(path_ref, "t_dwh_lib_categ_admin.sas7bdat")) |>
-    clean_names() |>
-    select(-id_audit,-id_categ_admin, -lb_categ_admin) |>
-    # Création des flags manquants
-    mutate(fl_epsn = if_else(str_detect(cd_categ_admin,"EPSN"), 1, 0),
-           fl_uhsi = if_else(str_detect(cd_categ_admin,"UHSI"), 1, 0),
-           fl_uhsa = if_else(str_detect(cd_categ_admin,"UHSA"), 1, 0),
-           fl_cne = if_else(str_detect(cd_categ_admin,"CNE"), 1, 0),
-           fl_CP = if_else(substr(cd_categ_admin,1,1) == "Q", 0,1),
-           fl_femme = if_else(str_detect(cd_categ_admin,"F$"), 1, 0)
+  clean_names() |>
+    filter(!str_detect(cd_categ_admin,"CNO")) |> #Supprime mention CNO (ex nom CNE)
+  select(-id_audit,-id_categ_admin, -lb_categ_admin) |>
+  # Création des flags manquants
+  mutate(fl_epsn = if_else(str_detect(cd_categ_admin,"EPSN"), 1, 0),
+         fl_uhsi = if_else(str_detect(cd_categ_admin,"UHSI"), 1, 0),
+         fl_uhsa = if_else(str_detect(cd_categ_admin,"UHSA"), 1, 0),
+         fl_cne = if_else(str_detect(cd_categ_admin,"CNE"), 1, 0),
+         fl_CP = if_else(substr(cd_categ_admin,1,1) == "Q", 0,1),
+         fl_femme = if_else(str_detect(cd_categ_admin,"F$"), 1, 0),
+         fl_mineur = if_else(str_detect(cd_categ_admin,"MF$|MH$"), 1, 0)
     ) |>
     # Adaptation des noms des variables
     rename("cd_categ_admin_red" = "cd_categ_admin",
            "cd_type_quartier_red" = "cd_type_quartier",
            "fl_sl" = "fl_semiliberte")
   
-
+pb <- lib_categ_admin |> 
+  group_by(cd_type_quartier_red,fl_femme,fl_mineur, fl_sl, fl_smpr, fl_epsn, fl_uhsi, fl_uhsa, fl_cne, fl_CP) |> 
+  mutate(n=n()) |> 
+  ungroup() |> 
+  arrange(desc(n),cd_type_quartier_red,fl_femme,fl_mineur, fl_sl, fl_smpr, fl_epsn, fl_uhsi, fl_uhsa, fl_cne, fl_CP)
     
     
 }
