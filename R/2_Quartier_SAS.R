@@ -210,7 +210,7 @@ if(!exists("cellule")){
     select(-capa_ope_max)
   
   #RED5 Recalcul
-  cellule <- cellule |> 
+  cellule2 <- cellule |> 
     mutate(cd_type_quartier_etab = case_when(type_etab == "CP" ~ NA,
                                              type_etab == "CSL" ~ "CSL/QSL",
                                              type_etab == "EPM" ~ "EPM",
@@ -227,74 +227,118 @@ if(!exists("cellule")){
                                     str_detect(lc_code,"DISC|ISOL|NURS|QCP|QPR|UDV|UHSA|UHSI|UVF") #SMPR ?
                                   ,1
                                   ,0), #identifier des places sans hébergement / dépendent pas de quartier
-           cd_type_quartier_red = case_when(fl_hors_capa == 1 ~ "AUT",
+           cd_type_quartier_red = case_when(fl_hors_capa == 1 ~ "AUT", #hors capa ou
+                                            cd_type_hebergement == "EPSN"|str_detect(lc_code,"EPSN") ~ "AUT", #EPSN par cohérence avec paramétrage
                                             is.na(cd_type_quartier_etab) & is.na(cd_type_quartier) ~ cd_type_quartier_lib_ugc, 
                                             is.na(cd_type_quartier_etab) ~ cd_type_quartier, 
-                                            .default = cd_type_quartier_etab), #RED5.3
+                                            .default = cd_type_quartier_etab) #RED5.3
+          ) |> 
+    #Reprise flags
+    mutate(# flag type de cellules
            fl_smpr = if_else(str_detect(lc_code,"SMPR")|cd_type_hebergement == "SMPR", 1, 0),
            fl_epsn = if_else(str_detect(lc_code,"EPSN")|cd_type_hebergement == "EPSN", 1, 0),
            fl_uhsi = if_else(str_detect(lc_code,"UHSI")|cd_type_hebergement == "UHSI", 1, 0),
            fl_uhsa = if_else(str_detect(lc_code,"UHSA")|cd_type_hebergement == "UHSA", 1, 0),
-           fl_cne = if_else(str_detect(lc_code,"CNE")|cd_type_hebergement == "CNE", 1, 0),
+           fl_qd = if_else(str_detect(lc_code,"DISC")|cd_type_hebergement == "DISC", 1, 0),
+           fl_qi = if_else(str_detect(lc_code,"ISOL")|cd_type_hebergement == "ISOL", 1, 0),
+           fl_nurs = if_else(str_detect(lc_code,"NURS")|cd_type_hebergement == "NURS", 1, 0),
+           fl_uvf = if_else(str_detect(lc_code,"UVF")|cd_type_hebergement == "UVF", 1, 0),
+           fl_qcp = if_else(str_detect(lc_code,"QCP")|cd_type_hebergement == "QCP", 1, 0),
+           fl_qpr = if_else(str_detect(lc_code,"QPR")|cd_type_hebergement == "QPR", 1, 0),
+           fl_udv = if_else(str_detect(lc_code,"UDV")|cd_type_hebergement == "UDV", 1, 0),
+           fl_cne = if_else(str_detect(lc_code,"CNE")|cd_type_hebergement == "CNE", 1, 0), 
            fl_sl=if_else(cd_type_hebergement == "SL"| type_etab == "CSL"|str_detect(lc_code,"SL") 
                          ,1
                          ,fl_sl), #& fl_hors_capa == 0 ?  si info incohérente (discipline) ?
-           fl_CP = if_else(type_etab == "CP" & !is.na(type_etab),1,0)
-           ) |> 
-    ### flage sur types de détenus
-    mutate(fl_femme = if_else(str_detect(lc_code,"QF") & fl_qf == 1 ,1,fl_femme), #RED1.3
+           fl_CP = if_else(type_etab == "CP" & !is.na(type_etab),1,0),
+           ### flage sur types de détenus
+           fl_femme = if_else(str_detect(lc_code,"QF") & fl_qf == 1 ,1,fl_femme), #RED1.3
            fl_mineur = if_else(
-             (str_detect(lc_code,"QM|QI") & fl_qm == 1) | cd_type_quartier_red == "EPM"
+             (str_detect(lc_code,"QM") & fl_qm == 1) | cd_type_quartier_red == "EPM"
              ,1
              ,fl_mineur) #RED1.3
            ) |> 
     select(-fl_qf,-fl_qm, -fl_qsl) |> 
     #Remplace NA par 0
-    mutate(across(starts_with("fl_"), ~ if_else(is.na(.),0,.))) #NA to 0 
+    mutate(across(starts_with("fl_"), ~ if_else(is.na(.),0,.))) |>  #NA to 0 
+    ### modif type_quartier et flags si ugc hors capa
+    mutate(fl_sl = if_else(cd_type_quartier_red == "AUT", NA, fl_sl),
+           fl_CP = if_else(cd_type_quartier_red == "AUT", NA, fl_CP) #cohérence avec au-dessus pour EPSN mais pas convaincu
+           )  
     
     #jointure avec la table de paramétrage
-    cellule2 <- cellule |> 
+    cellule3 <- cellule2 |> 
+      #supprime var calcul intermédiaires
+      # select(-cd_type_quartier_etab,-cd_type_quartier_lib_ugc) |> 
     left_join(
       read_sas(paste0(path_ref, "t_dwh_lib_categ_admin.sas7bdat")) |>
         clean_names() |>
-        filter(!str_detect(cd_categ_admin,"CNO") &
-                 !(cd_categ_admin %in% c("(ND)","(NF)","(NR)"))
-        ) |> #Supprime mention CNO (ex nom CNE) ou pas renseigné
+        filter(!str_detect(cd_categ_admin,"CNO") & #Supprime mention CNO (ex nom CNE) 
+                 !(cd_categ_admin %in% c("(ND)","(NF)","(NR)")) & #ou pas renseigné
+                 !str_detect(cd_categ_admin,"^EPSN") #ou Quartier EPSN
+        ) |> 
         select(-id_audit,-id_categ_admin, -lb_categ_admin) |>
         # Création des flags manquants
         mutate(fl_epsn = if_else(str_detect(cd_categ_admin,"EPSN"), 1, 0),
                fl_uhsi = if_else(str_detect(cd_categ_admin,"UHSI"), 1, 0),
                fl_uhsa = if_else(str_detect(cd_categ_admin,"UHSA"), 1, 0),
                fl_cne = if_else(str_detect(cd_categ_admin,"CNE"), 1, 0),
-               fl_CP = if_else(substr(cd_categ_admin,1,1) == "Q", 1,0),
+               fl_CP = if_else(substr(cd_categ_admin,1,1) == "Q"|cd_type_quartier=="SAS", 1,0),
                fl_femme = if_else(str_detect(cd_categ_admin,"F$"), 1, 0),
                fl_mineur = if_else(str_detect(cd_categ_admin,"MF$|MH$|UHSAM|UHSIM"), 1, 0),
                fl_semiliberte = if_else(str_detect(cd_categ_admin,"SL"), 1, 0)
         ) |>
+        # flag en NA pour les catégories AUTRES
+        mutate(fl_CP = if_else(cd_type_quartier=="AUT",NA,fl_CP),
+               fl_semiliberte = if_else(cd_type_quartier=="AUT",NA,fl_semiliberte)
+               ) |> 
         # Adaptation des noms des variables
         rename("cd_categ_admin_red" = "cd_categ_admin",
                "cd_type_quartier_red" = "cd_type_quartier",
                "fl_sl" = "fl_semiliberte")
-      )
+      ) |> 
+      # cd_categ_admin_red pour les modalités non renseignées
+      mutate(cd_categ_admin_red = case_when(!is.na(cd_categ_admin_red) ~ cd_categ_admin_red,
+                                            fl_qd == 1 & fl_mineur == 1 ~ "DISCM",
+                                            fl_qd == 1 & fl_femme == 1 ~ "DISCF",
+                                            fl_qd == 1 ~ "DISCH",
+                                            fl_qi == 1 & fl_mineur == 1 ~ "ISOLM",
+                                            fl_qi == 1 & fl_femme == 1 ~ "ISOLF",
+                                            fl_qi == 1 ~ "ISOLH",
+                                            fl_nurs == 1 ~ "NURS",
+                                            fl_uvf == 1  & fl_femme == 1 ~ "UVFF",
+                                            fl_uvf == 1 ~ "UVFH",
+                                            fl_qcp ==1 ~ "QCP",
+                                            fl_qpr ==1 ~ "QPR",
+                                            fl_udv ==1 ~ "UDV",
+                                            .default = cd_categ_admin_red)
+             )
   
-  test <- cellule2 |> group_by(cd_categ_admin,cd_categ_admin_red) |> summarise(n=n())
+  test <- cellule3 |> group_by(cd_categ_admin,cd_categ_admin_red) |> summarise(n=n())
+  test_pb1 <- cellule3 |> filter(is.na(cd_categ_admin_red) & cd_categ_admin == "QCSLH") 
+  test_pb2 <- cellule3 |> filter(cd_categ_admin_red == "QMAH" & cd_categ_admin == "SASH") 
   
 lib_categ_admin <- read_sas(paste0(path_ref, "t_dwh_lib_categ_admin.sas7bdat")) |>
   clean_names() |>
-    filter(!str_detect(cd_categ_admin,"CNO") &
-            !(cd_categ_admin %in% c("(ND)","(NF)","(NR)"))
-              ) |> #Supprime mention CNO (ex nom CNE) ou pas renseigné
+    filter(!str_detect(cd_categ_admin,"CNO") & #Supprime mention CNO (ex nom CNE) 
+            !(cd_categ_admin %in% c("(ND)","(NF)","(NR)")) & #ou pas renseigné
+             !str_detect(cd_categ_admin,"^EPSN") #ou Quartier EPSN
+              ) |> 
   select(-id_audit,-id_categ_admin, -lb_categ_admin) |>
   # Création des flags manquants
   mutate(fl_epsn = if_else(str_detect(cd_categ_admin,"EPSN"), 1, 0),
          fl_uhsi = if_else(str_detect(cd_categ_admin,"UHSI"), 1, 0),
          fl_uhsa = if_else(str_detect(cd_categ_admin,"UHSA"), 1, 0),
          fl_cne = if_else(str_detect(cd_categ_admin,"CNE"), 1, 0),
-         fl_CP = if_else(substr(cd_categ_admin,1,1) == "Q", 1,0),
+         fl_CP = if_else(substr(cd_categ_admin,1,1) == "Q"|cd_type_quartier=="SAS", 1,0),
          fl_femme = if_else(str_detect(cd_categ_admin,"F$"), 1, 0),
          fl_mineur = if_else(str_detect(cd_categ_admin,"MF$|MH$|UHSAM|UHSIM"), 1, 0),
          fl_semiliberte = if_else(str_detect(cd_categ_admin,"SL"), 1, 0)
-    ) |>
+  ) |>
+  # flag en NA pour les catégories AUTRES
+  mutate(fl_CP = if_else(cd_type_quartier=="AUT",NA,fl_CP),
+         fl_semiliberte = if_else(cd_type_quartier=="AUT",NA,fl_semiliberte)
+  ) |> 
     # Adaptation des noms des variables
     rename("cd_categ_admin_red" = "cd_categ_admin",
            "cd_type_quartier_red" = "cd_type_quartier",
