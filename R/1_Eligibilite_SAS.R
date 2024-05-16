@@ -265,11 +265,15 @@ write_parquet(eligible_ap,paste0(path,"Export/eligible_ap.parquet"))
 ## Redressement avec les règles de gestion
 t_dwh_h_situ_penit <- open_dataset(paste0(path_dwh,"t_dwh_h_situ_penit.parquet")) |> 
   filter(TOP_ECROUE == 1) |>  
+  collect()
+
+t_dwh_h_situ_penit <- t_dwh_h_situ_penit |> 
   select(NM_ECROU_INIT,
        DT_DEBUT_SITU_PENIT,DT_FIN_SITU_PENIT,
        CD_MOTIF_HEBERGEMENT,TOP_HEBERGE,CD_STATUT_SEMI_LIBERTE, CD_CATEG_ADMIN,
        TOP_LSC, CD_TYPE_AMENAGEMENT, CD_AMENAGEMENT_PEINE, 
-       DT_DEBUT_EXEC,DT_SUSPSL) |>
+       DT_DEBUT_EXEC,DT_SUSPSL, 
+       ID_UGC_REF) |>
   # Redressement aménagement de peine
   mutate(top_detention = if_else(CD_MOTIF_HEBERGEMENT %in% c('PE','PSEM','PSE','SEFIP','DDSE'),0,1),    
          AMENAGEMENT = case_when(
