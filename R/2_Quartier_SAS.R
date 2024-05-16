@@ -22,19 +22,19 @@ dt_max <- ym(2310) # AAMM date dernière extraction des bases écoles
 dt_max_long <- format(dt_max, "%d %B %Y")
 
 # chemin ------
-# path = paste0(here::here(),"/Donnees/")
-# path_data = "~/Documents/Recherche/3_Evaluation/_DATA/"
-# path_dwh = "~/Documents/Recherche/3_Evaluation/_DATA/INFPENIT/"
-# path_ref = "~/Documents/Recherche/3_Evaluation/_DATA/Referentiel/"
-# path_ref_ip = "~/Documents/Recherche/3_Evaluation/_DATA/Referentiel/"
-# path_capacite = paste0(path,"AUTRES/Places/")
+path = paste0(here::here(),"/Donnees/")
+path_data = "~/Documents/Recherche/3_Evaluation/_DATA/"
+path_dwh = "~/Documents/Recherche/3_Evaluation/_DATA/INFPENIT/"
+path_ref = "~/Documents/Recherche/3_Evaluation/_DATA/Referentiel/"
+path_ref_ip = "~/Documents/Recherche/3_Evaluation/_DATA/Referentiel/"
+path_capacite = paste0(path,"AUTRES/Places/")
 
 #sur site
-path = "L:/SDEX/EX3/_EVALUATION_POLITIQUES_PENITENTIAIRES/COMMANDES/2023-06 - SAS - IP1/Donnees/"
-path_dwh = "L:/SDEX/EX3/_ANALYSES_ET_ETUDES/TABLES_DE_DONNEES/R_import/"
-path_ref = "L:/SDEX/EX3/_ANALYSES_ET_ETUDES/TABLES_DE_DONNEES/tables_infpenit/"
-path_ref_ip = "L:/SDEX/EX3/_ANALYSES_ET_ETUDES/TABLES_DE_DONNEES/tables_IP/"
-path_capacite = "L:/SDEX/EX3/_ANALYSES_ET_ETUDES/TABLES_DE_DONNEES/Tables_Places_ope/"
+# path = "L:/SDEX/EX3/_EVALUATION_POLITIQUES_PENITENTIAIRES/COMMANDES/2023-06 - SAS - IP1/Donnees/"
+# path_dwh = "L:/SDEX/EX3/_ANALYSES_ET_ETUDES/TABLES_DE_DONNEES/R_import/"
+# path_ref = "L:/SDEX/EX3/_ANALYSES_ET_ETUDES/TABLES_DE_DONNEES/tables_infpenit/"
+# path_ref_ip = "L:/SDEX/EX3/_ANALYSES_ET_ETUDES/TABLES_DE_DONNEES/tables_IP/"
+# path_capacite = "L:/SDEX/EX3/_ANALYSES_ET_ETUDES/TABLES_DE_DONNEES/Tables_Places_ope/"
 
 
 # memory.limit(size = 18000)
@@ -82,9 +82,9 @@ write_parquet(ref_etab,paste0(path,"Export/ref_etab_fl.parquet"))
 rm(histo_capa_etab,histo_etab_femme,histo_etab_mineurs,histo_etab_sl)
 
 ## 1.2. liste des SAS renseignées dans SRJ (pour date d'application/date d'ouverture) ----
-# reprise des codes du SRJ qui ont été modifiées dans GENESIS
+###  1.2.1 Code du SRJ  modifiées dans GENESIS -----
 
-liste_sas <- read_sas(paste0(path_ref, "t_dwh_lib_structure.sas7bdat")) |>
+srj_sas <- read_sas(paste0(path_ref, "t_dwh_lib_structure.sas7bdat")) |>
   clean_names() |>
   filter(nm_type_structure == 3729) |>
   mutate(lib_sas = paste0(lb_structure_1, lb_structure_2),
@@ -99,14 +99,11 @@ liste_sas <- read_sas(paste0(path_ref, "t_dwh_lib_structure.sas7bdat")) |>
          )) |>
   select(id_structure, c_ori_est, nu_est, lc_sas, lib_sas, d_app, id_structure_rattach, c_ori_est_rat, nu_est_rat)
 
-write_parquet(liste_sas,paste0(path,"Export/liste_sas.parquet"))
-
-
+### 1.2.2. Normalisation des codes -----
 # sur les dates d'application : les SAS de Marseille, Poitiers, Bordeaux, Longuenesse et Aix
 # ont toutes une date d'application au 01/05/2022, même si elles étaient ouvertes avant (en raison
 # de l'arrêté les reconnaissant n'étant pas publié à leurs mises en service). Pour
 # les autres, la date d'application correspond bien à la date de mise en service de la SAS.
-srj_sas <- read_parquet(paste0(path, "Export/liste_sas.parquet")) %>% clean_names()
 
 srj_sas <- srj_sas %>% 
   mutate(cd_etab_sas = str_c(sprintf("%03s", c_ori_est), sprintf("%05s", nu_est)),
@@ -114,15 +111,16 @@ srj_sas <- srj_sas %>%
          .keep = "unused") %>% #"unused" retains only the columns not used in ... to create new columns. 
   select(cd_etab_sas, lc_sas, d_app, cd_etab_rat)
 
-# write.csv2(srj_sas,"srj_sas.csv")
 
-## 1.3. Info métiers SAS ----
+### 1.2.3. Info métiers SAS ----
 # récupérer info métiers sur ouverture SAS : date ouverture ; places ; places dédiées SAS ; + taille QSL si existe
+
 srj_suivi_sas_dap <- readxl::read_xlsx("Documents/Suivi_SAS_SRJ.xlsx") |> 
   clean_names() |> 
   select(dt_ouverture, operation, cd_etab_sas, places_prevues, places_prevues_sas, qsl) |> 
   mutate(neuve = if_else(operation=="Neuve",1,0),
          cd_etab_sas = sprintf("%08s", as.character(cd_etab_sas)),
+         places_prevues_sas = as.integer(places_prevues_sas),
          .keep = "unused")
 
 #ajout des infos
@@ -130,6 +128,10 @@ srj_sas <- srj_sas |>
   left_join(srj_suivi_sas_dap)
 
 rm(srj_suivi_sas_dap)
+
+### Export
+write_parquet(srj_sas,paste0(path,"Export/liste_sas.parquet"))
+
 
 # 2. Topographie SAS (cellules) ----
 # 
@@ -218,8 +220,7 @@ pb <- lib_categ_admin |>
 ###          fl_mineur ==1 : si cellule avec "QF" et établissements accueillant des femmes
 ###     
 ### RED6 refonte table paramétrage avec fl_cp + type de cellules
-if(!exists("cellule")){
-  cellule <- open_dataset(paste0(path_dwh, "t_dwh_h_cellule.parquet")) |> 
+cellule <- open_dataset(paste0(path_dwh, "t_dwh_h_cellule.parquet")) |> 
     collect() |> 
     clean_names() |> 
     select(-capa_normes_europe,
@@ -234,7 +235,6 @@ if(!exists("cellule")){
     mutate(fl_indisp = if_else(statut_ugc %in% c("AI","I"),1,0) #RED3
            ) |> 
     select(-statut_ugc)
-}
 
 #RED2 modif selon types de places et informations sur places dispo (ref_etab et capa de SP2)
 cellule <- cellule |> 
@@ -373,8 +373,6 @@ writexl::write_xlsx(tbl_detail_ecart, paste0(path,"Export/tbl_detail_ecart.xlsx"
 write_parquet(cellule, paste0(path,"Export/t_dwh_h_cellule_red.parquet"))
 
 ## 2.2. Réduire le nombre de lignes -----
-### RED1 : pour les flags on vérifie s'il y a un changement de valeur qui se maintient (0,1,1 ou 0,1,0)
-### on regarde les modifs pour un nombre réduit de colonnes
 ### RED2 : on ne garde que les observations avec des changements par id_ugc
 ### RED3 : on attribue date de fin à la ligne suivante
 
@@ -383,51 +381,51 @@ cellule <- read_parquet(paste0(path,"Export/t_dwh_h_cellule_red.parquet"))
 cellule <- data.table(cellule)
 setkey(cellule,id_ugc)
 
-  test <- cellule[,
+cellule <- cellule[,
                   .(date_debut = min(date_debut),
-                    date_fin = max(date_fin),
-                    n = .N
+                    date_fin = max(date_fin)
                     ),
-                  by = .(id_ugc,capa_theo,fl_indisp,fl_hors_capa,cd_categ_admin_red, cd_etablissement)]
-  #comptage des doublons
-  test <- test[ ,n := .N #comptage ligne
+                  by = .(id_ugc,capa_theo,fl_indisp,fl_hors_capa,cd_categ_admin_red, cd_etablissement, flag_validite)]
+#comptage des doublons
+cellule <- cellule[ ,`:=`( 
+                n=.N, #comptage ligne
+                date_first = first(date_debut)
+                ),
     ,by = .(id_ugc)]
-  #modif si doublon et que information paraît saisie APRES
-  setorder(test,id_ugc,date_debut)
 
-  ln_structure<- read_sas(paste0(path_ref, "t_dwh_lib_structure.sas7bdat")) 
-  ln_type_quartier_detail <- read_sas(paste0(path_ref, "t_dwh_lib_categ_admin.sas7bdat")) 
+# modif var de date : première ou fin de la précédente
+setorder(cellule,id_ugc,date_debut)
   
-#RED1 : récupère lead1 et lead2  
-col_remplies <- c("capa_theo","fl_femme", "fl_mineur", "fl_sl")
-##lead1
-test <- test[n>1
-               ,paste0(col_remplies, "_lead1") := 
-                    lapply(.SD, shift, n=1L, type = "lead") #applique la fonction shift sur les colonnes
-               ,by = .(id_ugc)
-               ,.SDcols = col_remplies]
-##lead2
-test <- test[n>1 #filtre pour doublons
-             ,paste0(col_remplies, "_lead2") := #modifie nom pour chaque colonne
-               lapply(.SD, shift, n=2L, type = "lead") #applique la fonction shift sur les colonnes
-             #et modifie leur nom
-             ,by = .(id_ugc)
-             ,.SDcols = col_remplies] #traitement que pour colonnes listées
-##redressement
-test2 <- test[n>1
-               ,.SD := fifelse(
-                 .SD == 0 &
-                 (paste0(col_remplies, "_lead1") == 1 & paste0(col_remplies, "_lead2") == 1 )
-                 | (paste0(col_remplies, "_lead1") == 1 & is.na(paste0(col_remplies, "_lead2")) ) 
-                 ,paste0(col_remplies, "_lead1")
-                 ,col_remplies )
-               ,by = .(id_ugc)
-             ,.SDcols = col_remplies]
-##lead2         
-  
+cellule <- cellule[order(id_ugc, date_debut)]
+cellule[, `:=`(
+    date_situ_ugc = fcoalesce(
+      shift(date_fin, type = "lead"),
+      date_first)
+  ), 
+  by = id_ugc]  
 
+# nettoyage
+cellule <- cellule[!is.na(cd_categ_admin_red),]
+cellule <- cellule[,
+             `:=`(
+               date_debut = NULL,
+               date_fin = NULL,
+               date_first = NULL,
+               n = NULL
+               )]
 
-test |> summarise(n = n(), dist_ugc = n_distinct(id_ugc))
+##2.3. Lien avec etab  -----
+### 2.3.1. Ref_etab ----
+ref_etab <- open_dataset(paste0(path,"Export/ref_etab_fl.parquet")) |> 
+  select(cd_etablissement, lc_etab, dt_fermeture) |> 
+  collect()
+
+cellule_etab <- merge(cellule,
+                      ref_etab)
+
+test <- cellule_etab[flag_validite == "Y" & fl_indisp==0,
+                .(capa_theo = sum(capa_theo)),
+                by = .(cd_etablissement,lc_etab,cd_categ_admin_red)]
 
 ## focus SAS MARSEILLE (places manquantes - LE QSL) ---- 
 # redressement du QSL en SAS
