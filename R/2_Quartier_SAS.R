@@ -30,7 +30,14 @@ path_capacite = paste0(path,"AUTRES/Places/")
 
 # memory.limit(size = 18000)
 
-# 1. Liste des SAS ------
+# 1. Import ------
+## 1.1. Eligibles
+suivi_ap <-  open_dataset(paste0(path,"Export/suivi_ap.parquet")) |> 
+  collect() |> 
+  janitor::clean_names()
+
+suivi_ap <- data.table(suivi_ap)
+suivi_ap <- suivi_ap[AMENAGEMENT_MSE == 0,]
 
 # Récupérer établissement puis ajouter caractéristiques selon types de détenu accueillis (SP2)
 # Identifier code SRJ des structures SAS
