@@ -34,7 +34,7 @@ un moyen efficace de lutter contre la récidive.
 
 # Questions évaluatives
 
-### **Question1 - Améliorer le recours aux aménagements de peine** 
+### **Question1 - Améliorer le recours aux aménagements de peine**
 
 -   Porte sur : l'efficacité de la politique (adéquation des effets au
     regard des objectifs)
