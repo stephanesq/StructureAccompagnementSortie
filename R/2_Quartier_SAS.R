@@ -22,10 +22,20 @@ dt_max <- ym(2310) # AAMM date dernière extraction des bases écoles
 dt_max_long <- format(dt_max, "%d %B %Y")
 
 # chemin ------
-path = paste0(here::here(),"/Donnees/")
-path_data = "~/Documents/Recherche/3_Evaluation/_DATA/"
-path_dwh = "~/Documents/Recherche/3_Evaluation/_DATA/INFPENIT/"
-path_ref = "~/Documents/Recherche/3_Evaluation/_DATA/Referentiel/"
+# path = paste0(here::here(),"/Donnees/")
+# path_data = "~/Documents/Recherche/3_Evaluation/_DATA/"
+# path_dwh = "~/Documents/Recherche/3_Evaluation/_DATA/INFPENIT/"
+# path_ref = "~/Documents/Recherche/3_Evaluation/_DATA/Referentiel/"
+# path_ref_ip = "~/Documents/Recherche/3_Evaluation/_DATA/Referentiel/"
+# path_capacite = paste0(path,"AUTRES/Places/")
+
+#sur site
+path = "L:/SDEX/EX3/_EVALUATION_POLITIQUES_PENITENTIAIRES/COMMANDES/2023-06 - SAS - IP1/Donnees/"
+path_dwh = "L:/SDEX/EX3/_ANALYSES_ET_ETUDES/TABLES_DE_DONNEES/R_import/"
+path_ref = "L:/SDEX/EX3/_ANALYSES_ET_ETUDES/TABLES_DE_DONNEES/tables_infpenit/"
+path_ref_ip = "L:/SDEX/EX3/_ANALYSES_ET_ETUDES/TABLES_DE_DONNEES/tables_IP/"
+path_capacite = "L:/SDEX/EX3/_ANALYSES_ET_ETUDES/TABLES_DE_DONNEES/Tables_Places_ope/"
+
 
 # memory.limit(size = 18000)
 
@@ -37,7 +47,7 @@ path_ref = "~/Documents/Recherche/3_Evaluation/_DATA/Referentiel/"
 
 ## 1.1 liste des établissements historisés (ref_etab) + capacite ----
 ### 1.1.1. dernier libellé ouvert si plusieurs -----
-ref_etab <- read_sas(paste0(path_ref, "ref_etab_historisee.sas7bdat")) |>  
+ref_etab <- read_sas(paste0(path_ref_ip, "ref_etab_historisee.sas7bdat")) |>  
   clean_names() |> 
   arrange(cd_etablissement,desc(dt_fermeture),desc(dt_disp)) |> 
     group_by(cd_etablissement) |> 
@@ -45,7 +55,7 @@ ref_etab <- read_sas(paste0(path_ref, "ref_etab_historisee.sas7bdat")) |>
   select(cd_etablissement, type_etab, lc_etab, dt_fermeture)
 
 ### 1.1.2. Liste places ope (SP2) ------
-histo_capa_etab <- openxlsx::read.xlsx(paste0(path_data,"AUTRES/Places/capa_ope_sp2_histo.xlsx")) |> 
+histo_capa_etab <- openxlsx::read.xlsx(paste0(path_capacite,"capa_ope_sp2_histo.xlsx")) |> 
   clean_names() |> 
   select(-disp,-etablissement,-lc_etab,-lc_disp,-lc_spip,-type_etab) |> 
   mutate(dt_mois = janitor::excel_numeric_to_date(dt_mois))
@@ -183,17 +193,8 @@ pb <- lib_categ_admin |>
 
 ### 2.1.2. Recalcul cellules -----
 ### Redressements :
-### RED0 type_quartier redressé 
-###   RED0.1 EPSN que si Fresnes  (MA ou CP, 00101675,00637851)
 ### RED1 Flags à NA si non-renseignés (2 initialement)
-###   RED1.2 si cd_type_hebergement==SL => fl_sl ==1
-###   RED1.3 A AMELIORER : selon les lettres/chiffres ensuite
-###          fl_femme ==1 : si cellule avec "QF" et établissements accueillant des femmes
-###   RED1.4 A AMELIORER 
-###          fl_mineur ==1 : si cellule avec "QF" et établissements accueillant des femmes
-###     
-### RED2 Fusion  des lignes identiques en fonction de capa_theo,fl_femme, fl_mineur, fl_sl,statut_ugc,lc_code,cd_categ_admin
-### 
+### RED2 Etablissement avec quartiers femme ou mineur connu  
 ### RED3.1 Indic indisponible (fl_indisp) à partir du statut_ugc AI ou I
 ### RED4 Capacité théorique 
 ###   RED4.1 Si inoccupable, alors capa = 0
@@ -207,7 +208,14 @@ pb <- lib_categ_admin |>
 ###               si cd_type_quartier_etab est renseigné
 ###               si cd_type_quartier (le quartier dont dépend l'ugc) est renseigné
 ###               sinon cd_type_quartier_lib_ugc
-###   RED5.3 recalcul d
+###   RED5.3 Création des flags à partir de cd_type_hebergement ou le libellé UGC
+###     RED5.3.1 fl_EPSN : EPSN que si Fresnes  (MA ou CP, 00101675,00637851)
+###     RED5.3.2 fl_sl :
+###     RED5.3.3 fl_femme A AMELIORER : selon les lettres/chiffres ensuite
+###          fl_femme ==1 : si cellule avec "QF" et établissements accueillant des femmes
+###     RED5.3.4 fl_mineur A AMELIORER 
+###          fl_mineur ==1 : si cellule avec "QF" et établissements accueillant des femmes
+###     
 ###   RED5.4 refonte table paramétrage avec fl_cp + type de cellules
 if(!exists("cellule")){
   cellule <- open_dataset(paste0(path_dwh, "t_dwh_h_cellule.parquet")) |> 
@@ -222,15 +230,11 @@ if(!exists("cellule")){
            -id_ugc_histo,-type) |> 
     mutate(across(starts_with("fl_"), ~ if_else(.==2,NA, as.double(.)))) |> #RED1
     mutate(across(where(is.character), ~ if_else( . %in% c("NA","(ND)","(NF)","(NR)"), NA, as.factor(.))))   |> 
-    mutate(cd_type_hebergement = if_else(cd_type_hebergement == "EPSN" & 
-                                           !(cd_etablissement %in% c("00101675","00637851"))
-                                         ,"NORM"
-                                         ,cd_type_hebergement), #RED0.1
-           fl_indisp = if_else(statut_ugc %in% c("AI","I"),1,0) #RED3.1
+    mutate(fl_indisp = if_else(statut_ugc %in% c("AI","I"),1,0) #RED3
            ) |> 
     select(-statut_ugc)
 
-  # modif selon types de places et informations sur places dispo (ref_etab et capa de SP2)
+  #RED2 modif selon types de places et informations sur places dispo (ref_etab et capa de SP2)
   cellule <- cellule |> 
     left_join(read_parquet(paste0(path,"Export/ref_etab_fl.parquet")) |> 
                 select(-dt_fermeture)
@@ -281,7 +285,11 @@ if(!exists("cellule")){
     #Reprise flags
     mutate(# flag type de cellules
            fl_smpr = if_else(str_detect(lc_code,"SMPR")|cd_type_hebergement == "SMPR", 1, 0),
-           fl_epsn = if_else(str_detect(lc_code,"EPSN")|cd_type_hebergement == "EPSN", 1, 0),
+           fl_epsn = if_else(
+             (str_detect(lc_code,"EPSN")|cd_type_hebergement == "EPSN") & 
+               cd_etablissement %in% c("00101675","00637851")
+                 , 1
+                 , 0), #RED5.3.1 fl_EPSN 
            fl_uhsi = if_else(str_detect(lc_code,"UHSI")|cd_type_hebergement == "UHSI", 1, 0),
            fl_uhsa = if_else(str_detect(lc_code,"UHSA")|cd_type_hebergement == "UHSA", 1, 0),
            fl_qd = if_else(str_detect(lc_code,"DISC")|cd_type_hebergement == "DISC", 1, 0),
@@ -296,7 +304,7 @@ if(!exists("cellule")){
            ### traitement spécifique fl_sl
            fl_sl=if_else(cd_type_hebergement == "SL"| cd_type_quartier_red == "CSL/QSL"|str_detect(lc_code,"SL") 
                          ,1
-                         ,fl_sl), #& fl_hors_capa == 0 ?  si info incohérente (discipline) ?
+                         ,fl_sl), #RED5.3.2 fl_sl 
            ### flage sur types de détenus
            fl_femme = if_else(str_detect(lc_code,"QF") & fl_qf == 1 ,1,fl_femme), #RED1.3
            fl_mineur = if_else(
@@ -367,8 +375,9 @@ if(!exists("cellule")){
            ) |> 
     group_by(difference) |> 
     summarise(n=n())
+  write.csv(resume_ecart, path = paste0(path,"Export/resume_ecart.csv"))
   
-  tbl_resume_ecart <- cellule |> 
+  tbl_detail_ecart <- cellule |> 
     mutate(difference = case_when(is.na(cd_categ_admin) ~ "3_nvl_info",
                                   cd_categ_admin == cd_categ_admin_red ~ "1_mm_info",
                                   .default = "2_diff_info")
@@ -376,7 +385,7 @@ if(!exists("cellule")){
     group_by(cd_categ_admin,cd_categ_admin_red, difference) |> 
       summarise(n=n()) |> 
     ungroup() 
-  
+  write.csv(resume_ecart, path = paste0(path,"Export/tbl_detail_ecart.csv"))
 
 
     
