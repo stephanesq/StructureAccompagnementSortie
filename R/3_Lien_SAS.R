@@ -123,8 +123,8 @@ test2[, duree_ap_impute := duree_ap + runif(.N)]
 test2[, time := duree_observation]
 test2[ap == 1, time := duree_ap_impute]
 ## SAS
-test2[, SAS := 0]
-test2[str_detect(cd_categ_admin_red,"^SAS"), SAS := 1]
+test2[, SAS := "hors SAS"]
+test2[str_detect(cd_categ_admin_red,"^SAS"), SAS := "SAS"]
 
 
 ## 5.2 Kapman Meier -----
@@ -142,7 +142,7 @@ p +
   # update figure labels/titles
   labs(
     y = "Pourcentage sans aménagement",
-    title = "Recurrence by Time From Surgery to Randomization",
+    title = "Temps passé depuis un changement de quartier",
   )
 
   # contrôle sur les premières apparitions des id_ugc...
