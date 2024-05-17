@@ -1,5 +1,5 @@
 # packages ----
-pacman::p_load(tidyverse, arrow, data.table, janitor, haven)
+pacman::p_load(tidyverse, arrow, data.table, janitor, haven, ggsurvfit)
 
 # paramètres ----
 
@@ -26,10 +26,11 @@ suivi_ap <-  open_dataset(paste0(path,"Export/suivi_ap.parquet")) |>
 
 suivi_ap <- data.table(suivi_ap)
 suivi_ap <- suivi_ap[amenagement_mse == 0,] 
+# index
+setkey(suivi_ap,nm_ecrou_init)
 
 ## 1.2. UGC ds situ_penit ----
-### 1.2.1. traitement situ_penit ----- 
-# on récupère les situ_penit des personnes qui sont passées par les SAS ----
+### 1.2.1. traitement import situ_penit -----
 situ_cols <- c('nm_ecrou_init',
                'dt_debut_situ_penit', 'dt_fin_situ_penit', 
                'cd_etablissement','id_ugc_ref', 'cd_categ_admin', 
@@ -45,37 +46,106 @@ situ_penit  <- read_parquet(str_glue("{path_dwh}t_dwh_h_situ_penit.parquet"),
   select(-top_ecroue) |> 
   as.data.table()
 
-# top_lsc en numérique
-situ_penit[, top_lsc := as.numeric(top_lsc)]
+# index
+setkey(situ_penit,nm_ecrou_init)
 
-#que eligibles
+#jointure eligibles
 ecrou_sas_ugc <- situ_penit[suivi_ap, 
                             on = .(nm_ecrou_init), 
                             nomatch = 0][ #innerjoin
   order(nm_ecrou_init, dt_debut_situ_penit)]
 
+#suppri situ_penit
+rm(situ_penit)
+
 ### 1.2.2. RED1 : date situ -----
 # modif var de date : première ou fin de la précédente
-setorder(cellule_red,id_ugc,date_debut)
+setorder(ecrou_sas_ugc,nm_ecrou_init,dt_debut_situ_penit)
 
-cellule_red <- cellule_red[order(id_ugc, date_debut)]
-cellule_red[, `:=`(
+ecrou_sas_ugc[, `:=`(
   date_situ_ugc = fcoalesce(
-    shift(date_fin, type = "lead"),
-    date_debut)
+    shift(dt_fin_situ_penit, type = "lead"),
+    dt_debut_situ_penit)
 ), 
-by = id_ugc]  
+by = nm_ecrou_init]  
 
 # nettoyage
-cellule_red <- cellule_red[!is.na(cd_categ_admin_red),]
-cellule_red <- cellule_red[,
+ecrou_sas_ugc <- ecrou_sas_ugc[id_ugc_ref > -3,] #id_ugc renseigné
+ecrou_sas_ugc <- ecrou_sas_ugc[,
                            `:=`(
-                             date_debut = NULL,
-                             date_fin = NULL
+                             dt_debut_situ_penit = NULL,
+                             dt_fin_situ_penit = NULL
                            )]
 
+### 1.2.3. Export ----
+write_parquet(ecrou_sas_ugc, paste0(path,"Export/ecrou_sas_ugc.parquet"))
 
-# contrôle sur les premières apparitions des id_ugc...
+## 1.3. Info cellule ----
+# même id_ugc, info précédente dans table cellule
+by <- join_by(id_ugc_ref == id_ugc, 
+              cd_etablissement,
+              closest(date_situ_ugc >= date_situ_ugc))
+ecrou_sas_ugc_red <- left_join(ecrou_sas_ugc, 
+                               cellule_red_etab |> select(-dt_fermeture, -n, -fl_indisp, -lc_code), 
+                               by)
+
+ecrou_sas_ugc_red <- ecrou_sas_ugc_red |> 
+  select(-id_ugc_ref_histo, -cd_categ_admin, -date_situ_ugc.y)
+
+test <- ecrou_sas_ugc_red[,
+                               .(date_situ_ugc = min(date_situ_ugc.x)),
+                               .(nm_ecrou_init,cd_etablissement,
+                                 qtm_ferme_tacc,dt_ecrou_initial, dt_fin_peine, 
+                                 dt_dbt_elig, dt_fin_elig, dt_dbt_elig_lsc, dt_dbt_elig_lscd, 
+                                 top_lsc, amenagement, dt_dbt_ap, dt_fin_ap, ap, 
+                                cd_categ_admin_red) #capa_theo,
+                      ]
+
+# eligible pas aménagés
+test2 <- test[is.na(dt_dbt_ap) | dt_dbt_ap > date_situ_ugc,]
+# cd_categ_admin renseigné
+test2 <- test2[!is.na(cd_categ_admin_red),]
+setorder(test2,nm_ecrou_init,date_situ_ugc)
+test2[, `:=`(
+  date_next_situ_ugc = fcoalesce(
+    shift(date_situ_ugc, type = "lag"),
+    dt_fin_elig)
+), 
+by = nm_ecrou_init]  
+
+### 5.1.2. Variables nécessaires ------
+## Durée observation
+test2[, duree_observation := time_length(interval(date_situ_ugc, date_next_situ_ugc), unit = "months")]
+## Durée AP + imputer pour éviter égalité avec une décimale
+test2[, duree_ap := time_length(interval(date_situ_ugc, dt_dbt_ap), unit = "months")]
+test2[, duree_ap_impute := duree_ap + runif(.N)]
+## Temps
+test2[, time := duree_observation]
+test2[ap == 1, time := duree_ap_impute]
+## SAS
+test2[, SAS := 0]
+test2[str_detect(cd_categ_admin_red,"^SAS"), SAS := 1]
+
+
+## 5.2 Kapman Meier -----
+# https://www.danieldsjoberg.com/ggsurvfit/
+# KM
+p <- survfit2(Surv(time, ap) ~ SAS, data = test2) |>
+  ggsurvfit(linewidth = 1) +
+  add_confidence_interval() +
+  add_risktable() +
+  add_quantile(y_value = 0.6, color = "gray50", linewidth = 0.75) +
+  scale_ggsurvfit()
+p +
+  # limit plot to show 24 months and less
+  coord_cartesian(xlim = c(0, 24)) +
+  # update figure labels/titles
+  labs(
+    y = "Pourcentage sans aménagement",
+    title = "Recurrence by Time From Surgery to Randomization",
+  )
+
+  # contrôle sur les premières apparitions des id_ugc...
 situ_penit[id_ugc_ref > -3, .(min_dt = min(dt_debut_situ_penit), max_dt = max(dt_fin_situ_penit))]
 situ_penit[id_ugc_ref_histo > -3, .(min_dt = min(dt_debut_situ_penit), max_dt = max(dt_fin_situ_penit))]
 # tout s'explique (presque). la variable id_ugc n'existe que depuis janvier 2023, d'où l'impossibilité de trouver des observations avant 2023 en fonction de la cellule. CD_CATEG_ADMIN C PARTI 
