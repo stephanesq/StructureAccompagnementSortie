@@ -17,33 +17,70 @@ path_capacite = paste0(path,"AUTRES/Places/")
 # path_ref = "L:/SDEX/EX3/_ANALYSES_ET_ETUDES/TABLES_DE_DONNEES/tables_infpenit/"
 # path_ref_ip = "L:/SDEX/EX3/_ANALYSES_ET_ETUDES/TABLES_DE_DONNEES/tables_IP/"
 # path_capacite = "L:/SDEX/EX3/_ANALYSES_ET_ETUDES/TABLES_DE_DONNEES/Tables_Places_ope/"
- 
 
+# 1. Import ------
+## 1.1. Eligibles -----
+suivi_ap <-  open_dataset(paste0(path,"Export/suivi_ap.parquet")) |> 
+  collect() |> 
+  janitor::clean_names()
+
+suivi_ap <- data.table(suivi_ap)
+suivi_ap <- suivi_ap[amenagement_mse == 0,] 
+
+## 1.2. UGC ds situ_penit ----
+### 1.2.1. traitement situ_penit ----- 
 # on récupère les situ_penit des personnes qui sont passées par les SAS ----
-situ_cols <- c('nm_ecrou_init', 'nm_ecrou_courant', 'dt_debut_situ_penit', 'dt_fin_situ_penit', 
-               'cd_etablissement','id_ugc_ref', 'id_ugc_ref_histo', 
-               'cd_categ_admin', 'top_ecroue',
-               'cd_type_amenagement', 'cd_amenagement_peine', 'cd_motif_hebergement',
-               'dt_suspsl', 'dt_debut_exec', 'top_lsc', 'top_heberge',
-               'fl_statut_semi_liberte',
-               'top_sortie_def', 'top_evade')
+situ_cols <- c('nm_ecrou_init',
+               'dt_debut_situ_penit', 'dt_fin_situ_penit', 
+               'cd_etablissement','id_ugc_ref', 'cd_categ_admin', 
+               'top_ecroue')
 
-if(!exists("situ_penit")){
-  situ_penit  <- read_parquet(str_glue("{path_dwh}t_dwh_h_situ_penit.parquet"),
+if(!exists("situ_penit")){}
+situ_penit  <- read_parquet(str_glue("{path_dwh}t_dwh_h_situ_penit.parquet"),
                               col_select = toupper(situ_cols)) %>% 
-    clean_names() %>% 
-    mutate(across(where(is.character), \(x) na_if(x, "NA"))) %>% 
-    # mutate(across(starts_with("dt_"), as.Date)) %>% 
-    as.data.table()
-}
+  clean_names() |>  
+  filter(top_ecroue == 1) |>  
+  mutate(across(where(is.character), ~ if_else( . %in% c("NA","(ND)","(NF)","(NR)"), NA, .) )) |> 
+  mutate(across(starts_with("dt_"), as.Date)) |> 
+  select(-top_ecroue) |> 
+  as.data.table()
+
+# top_lsc en numérique
+situ_penit[, top_lsc := as.numeric(top_lsc)]
+
+#que eligibles
+ecrou_sas_ugc <- situ_penit[suivi_ap, 
+                            on = .(nm_ecrou_init), 
+                            nomatch = 0][ #innerjoin
+  order(nm_ecrou_init, dt_debut_situ_penit)]
+
+### 1.2.2. RED1 : date situ -----
+# modif var de date : première ou fin de la précédente
+setorder(cellule_red,id_ugc,date_debut)
+
+cellule_red <- cellule_red[order(id_ugc, date_debut)]
+cellule_red[, `:=`(
+  date_situ_ugc = fcoalesce(
+    shift(date_fin, type = "lead"),
+    date_debut)
+), 
+by = id_ugc]  
+
+# nettoyage
+cellule_red <- cellule_red[!is.na(cd_categ_admin_red),]
+cellule_red <- cellule_red[,
+                           `:=`(
+                             date_debut = NULL,
+                             date_fin = NULL
+                           )]
+
 
 # contrôle sur les premières apparitions des id_ugc...
 situ_penit[id_ugc_ref > -3, .(min_dt = min(dt_debut_situ_penit), max_dt = max(dt_fin_situ_penit))]
 situ_penit[id_ugc_ref_histo > -3, .(min_dt = min(dt_debut_situ_penit), max_dt = max(dt_fin_situ_penit))]
 # tout s'explique (presque). la variable id_ugc n'existe que depuis janvier 2023, d'où l'impossibilité de trouver des observations avant 2023 en fonction de la cellule. CD_CATEG_ADMIN C PARTI 
 
-# top_lsc en numérique
-situ_penit[, top_lsc := as.numeric(top_lsc)]
+
 
 # on garde toutes les observations où qqn est dans une UGC SAS
 ## par l'id_ugc (valable à partir de janvier 2023)
