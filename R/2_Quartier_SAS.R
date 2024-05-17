@@ -30,14 +30,7 @@ path_capacite = paste0(path,"AUTRES/Places/")
 
 # memory.limit(size = 18000)
 
-# 1. Import ------
-## 1.1. Eligibles
-suivi_ap <-  open_dataset(paste0(path,"Export/suivi_ap.parquet")) |> 
-  collect() |> 
-  janitor::clean_names()
 
-suivi_ap <- data.table(suivi_ap)
-suivi_ap <- suivi_ap[AMENAGEMENT_MSE == 0,]
 
 # Récupérer établissement puis ajouter caractéristiques selon types de détenu accueillis (SP2)
 # Identifier code SRJ des structures SAS
@@ -373,46 +366,46 @@ writexl::write_xlsx(tbl_detail_ecart, paste0(path,"Export/tbl_detail_ecart.xlsx"
 write_parquet(cellule, paste0(path,"Export/t_dwh_h_cellule_red.parquet"))
 
 ## 2.2. Réduire le nombre de lignes -----
+### RED1 : on attribue date de fin à la ligne suivante
 ### RED2 : on ne garde que les observations avec des changements par id_ugc
-### RED3 : on attribue date de fin à la ligne suivante
 
+### 2.2.1. Import et data.table ----
 cellule <- read_parquet(paste0(path,"Export/t_dwh_h_cellule_red.parquet"))
 
 cellule_red <- data.table(cellule)
 setkey(cellule_red,id_ugc)
 
-cellule_red <- cellule_red[,
-                  .(date_debut = min(date_debut),
-                    date_fin = max(date_fin)
-                    ),
-                  by = .(id_ugc,lc_code,capa_theo,fl_indisp,fl_hors_capa,cd_categ_admin_red, cd_etablissement, flag_validite)]
-#comptage des doublons
-cellule_red <- cellule_red[ ,`:=`( 
-                n=.N, #comptage ligne
-                date_first = first(date_debut)
-                ),
-    ,by = .(id_ugc)]
-
+### 2.2.2. RED1 : date situ
 # modif var de date : première ou fin de la précédente
 setorder(cellule_red,id_ugc,date_debut)
-  
+
 cellule_red <- cellule_red[order(id_ugc, date_debut)]
 cellule_red[, `:=`(
-    date_situ_ugc = fcoalesce(
-      shift(date_fin, type = "lead"),
-      date_first)
-  ), 
-  by = id_ugc]  
+  date_situ_ugc = fcoalesce(
+    shift(date_fin, type = "lead"),
+    date_debut)
+), 
+by = id_ugc]  
 
 # nettoyage
 cellule_red <- cellule_red[!is.na(cd_categ_admin_red),]
 cellule_red <- cellule_red[,
-             `:=`(
-               date_debut = NULL,
-               date_fin = NULL,
-               date_first = NULL,
-               n = NULL
-               )]
+                           `:=`(
+                             date_debut = NULL,
+                             date_fin = NULL
+                           )]
+
+cellule_red <- cellule_red[,
+                  .(date_debut = min(date_situ_ugc)),
+                  by = .(id_ugc,lc_code,capa_theo,fl_indisp,fl_hors_capa,cd_categ_admin_red, cd_etablissement, flag_validite)]
+#comptage des doublons
+cellule_red <- cellule_red[ ,`:=`( 
+                n=.N #comptage ligne
+                ),
+    ,by = .(id_ugc)]
+
+#suppr cellule
+rm(cellule)
 
 ##2.3. Lien avec etab  -----
 ### 2.3.1. Ref_etab ----
@@ -423,6 +416,10 @@ ref_etab <- open_dataset(paste0(path,"Export/ref_etab_fl.parquet")) |>
 cellule_red_etab <- merge(cellule_red,
                       ref_etab)
 
+#suppr cellule
+rm(cellule_red)
+
+### 2.3.2. Verif cohérence -----
 #verif place théoriques
 verif_capa_theo <- cellule_red_etab[flag_validite == "Y" & fl_indisp==0,
                          .(capa_theo = sum(capa_theo)),
@@ -431,6 +428,11 @@ verif_capa_theo <- cellule_red_etab[flag_validite == "Y" & fl_indisp==0,
 verif_capa_theo_sas <- cellule_red_etab[flag_validite == "Y" & fl_indisp==0 & str_detect(cd_categ_admin_red,"SAS[A-Z]$"),
                          .(capa_theo = sum(capa_theo)),
                          by = .(cd_etablissement,lc_etab,cd_categ_admin_red)]
+
+### 2.3.3. Export -----
+### 
+write_parquet(cellule_red_etab, paste0(path,"Export/cellule_etab.parquet"))
+
 
 ## focus SAS MARSEILLE (places manquantes - LE QSL) ---- 
 # redressement du QSL en SAS
