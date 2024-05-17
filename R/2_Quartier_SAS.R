@@ -396,7 +396,7 @@ cellule_red <- cellule_red[,
                            )]
 
 cellule_red <- cellule_red[,
-                  .(date_debut = min(date_situ_ugc)),
+                  .(date_situ_ugc = min(date_situ_ugc)),
                   by = .(id_ugc,lc_code,capa_theo,fl_indisp,fl_hors_capa,cd_categ_admin_red, cd_etablissement, flag_validite)]
 #comptage des doublons
 cellule_red <- cellule_red[ ,`:=`( 
