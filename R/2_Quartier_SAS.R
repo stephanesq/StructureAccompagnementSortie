@@ -433,6 +433,10 @@ verif_capa_theo_sas <- cellule_red_etab[flag_validite == "Y" & fl_indisp==0 & st
 ### 
 write_parquet(cellule_red_etab, paste0(path,"Export/cellule_etab.parquet"))
 
+haven::write_dta(cellule_red_etab, 
+                 paste0(path,"Export/cellule_etab.dta"),
+                 version = 14)
+
 
 ## focus SAS MARSEILLE (places manquantes - LE QSL) ---- 
 # redressement du QSL en SAS
