@@ -68,7 +68,9 @@ ref_etab <- ref_etab |>
 
 
 ### 1.1.4. Export ------
-write_parquet(ref_etab,paste0(path,"Export/ref_etab_fl.parquet"))
+write_parquet(ref_etab,
+              paste0(path,"Export/ref_etab_fl.parquet"),
+              compression = "zstd")
 
 rm(histo_capa_etab,histo_etab_femme,histo_etab_mineurs,histo_etab_sl)
 
@@ -121,7 +123,9 @@ srj_sas <- srj_sas |>
 rm(srj_suivi_sas_dap)
 
 ### Export
-write_parquet(srj_sas,paste0(path,"Export/liste_sas.parquet"))
+write_parquet(srj_sas,
+              paste0(path,"Export/liste_sas.parquet"),
+              compression = "zstd")
 
 srj_sas <- read_parquet(paste0(path,"Export/liste_sas.parquet"))
 
@@ -152,6 +156,18 @@ srj_sas <- read_parquet(paste0(path,"Export/liste_sas.parquet"))
 #       Sinon, CD_CATEG_ADMIN est complété par 'H'.
 
 ###2.1.1. Retravail table de paramétrage ------
+### A partir des capacités remontées par SP2
+### Questions en suspens : ARRIVANT ?
+### Cellules hors capacité :
+###   Quartiers/Etatblissement "autres" (cd_type_quartier_red == "AUT"): 
+###     Déja présents : UHSI/UHSA
+###     Ajouts : NURS
+###   Situés dans des quartiers/etab : 
+###     Déjà présents :
+###     Ajouts : NURS
+### Type de détenus :
+###   Déjà présents : H/F + M 
+###   Ajouts : PMR
 ###
 lib_categ_admin <- read_sas(paste0(path_ref, "t_dwh_lib_categ_admin.sas7bdat")) |>
   clean_names() |>
@@ -168,7 +184,8 @@ lib_categ_admin <- read_sas(paste0(path_ref, "t_dwh_lib_categ_admin.sas7bdat")) 
          fl_CP = if_else(substr(cd_categ_admin,1,1) == "Q"|cd_type_quartier=="SAS", 1,0),
          fl_femme = if_else(str_detect(cd_categ_admin,"F$"), 1, 0),
          fl_mineur = if_else(str_detect(cd_categ_admin,"MF$|MH$|UHSAM|UHSIM|EPM"), 1, 0),
-         fl_semiliberte = if_else(str_detect(cd_categ_admin,"SL"), 1, 0)
+         fl_semiliberte = if_else(str_detect(cd_categ_admin,"SL"), 1, 0),
+         fl_cprou = if_else(str_detect(cd_categ_admin,"CPROU"), 1, 0)
   ) |>
   # flag en NA pour les catégories AUTRES
   mutate(fl_CP = if_else(cd_type_quartier=="AUT",NA,fl_CP),
@@ -178,6 +195,8 @@ lib_categ_admin <- read_sas(paste0(path_ref, "t_dwh_lib_categ_admin.sas7bdat")) 
   rename("cd_categ_admin_red" = "cd_categ_admin",
          "cd_type_quartier_red" = "cd_type_quartier",
          "fl_sl" = "fl_semiliberte")
+
+openxlsx::write.xlsx(lib_categ_admin, paste0(path_ref, "lib_categ_admin_nvl.xlsx"))
 
 ### Pb doublon ?
 pb <- lib_categ_admin |> 
@@ -225,7 +244,7 @@ cellule <- open_dataset(paste0(path_dwh, "t_dwh_h_cellule.parquet")) |>
            -id_ugc_histo,-type) |> 
     mutate(across(starts_with("fl_"), ~ if_else(.==2,NA, as.double(.)))) |> #RED1
     mutate(across(where(is.character), ~ if_else( . %in% c("NA","(ND)","(NF)","(NR)"), NA, as.factor(.))))   |> 
-    mutate(fl_indisp = if_else(statut_ugc %in% c("AI","I"),1,0) #RED3
+    mutate(fl_indisp = if_else(statut_ugc %in% c("AI","I") | str_detect(lc_code,"_F$"),1,0) #RED3
            ) |> 
     select(-statut_ugc)
 
@@ -266,7 +285,7 @@ cellule <- cellule |>
                                               str_detect(lc_code,"MA") ~ "MA/QMA",
                                               str_detect(lc_code,"SL") ~ "CSL/QSL",
                                               str_detect(lc_code,"SMPR|EPSN|UHSI|UHSA|CNE") ~ "AUT",
-                                              .default = "MA/QMA"), #RED5.2
+                                              .default = NA), #RED5.2
          fl_hors_capa = if_else(cd_type_hebergement %in% c("DISC","ISOL","NURS","QCP","QPR","UDV","UHSA","UHSI","UVF")|
                                   str_detect(lc_code,"DISC|ISOL|NURS|QCP|QPR|UDV|UHSA|UHSI|UVF") #SMPR ?
                                 ,1
@@ -296,7 +315,10 @@ cellule <- cellule |>
     fl_qpr = if_else(str_detect(lc_code,"QPR")|cd_type_hebergement == "QPR", 1, 0),
     fl_udv = if_else(str_detect(lc_code,"UDV")|cd_type_hebergement == "UDV", 1, 0),
     fl_cne = if_else(str_detect(lc_code,"CNE")|cd_type_hebergement == "CNE", 1, 0), 
+    fl_uat = if_else(str_detect(lc_code,"UAT")|cd_type_hebergement == "UAT", 1, 0), 
+    fl_arri = if_else(str_detect(lc_code,"QA")|cd_type_hebergement == "ARRI", 1, 0), 
     fl_CP = if_else(type_etab == "CP" & !is.na(type_etab),1,0),
+    fl_cprou = if_else(str_detect(lc_code,"CPRO")|cd_type_hebergement == "CPUR", 1, 0),
     ### traitement spécifique fl_sl
     fl_sl=if_else(cd_type_hebergement == "SL"| cd_type_quartier_red == "CSL/QSL"|str_detect(lc_code,"SL") 
                   ,1
@@ -310,69 +332,89 @@ cellule <- cellule |>
   ) |> 
   select(-fl_qf,-fl_qm, -fl_qsl) |> 
   #Remplace NA par 0
-  mutate(across(starts_with("fl_"), ~ if_else(is.na(.),0,.))) |>  #NA to 0 
-  ### modif type_quartier et flags si ugc hors capa
-  mutate(fl_sl = if_else(cd_type_quartier_red == "AUT", NA, fl_sl),
-         fl_CP = if_else(cd_type_quartier_red == "AUT", NA, fl_CP) #cohérence avec au-dessus pour EPSN mais pas convaincu
-  )    
+  mutate(across(starts_with("fl_"), ~ if_else(is.na(.),0,.)))  #NA to 0 
     
 ####RED6 jointure avec la table de paramétrage -----
 cellule <- cellule |> 
   #supprime var calcul intermédiaires
   # select(-cd_type_quartier_etab,-cd_type_quartier_lib_ugc) |> 
-  left_join(lib_categ_admin
-            ) |> 
+  # left_join(lib_categ_admin
+  #           ) |> 
   # cd_categ_admin_red pour les modalités non renseignées
-  mutate(cd_categ_admin_red = case_when(!is.na(cd_categ_admin_red) ~ cd_categ_admin_red,
-                                        fl_qd == 1 & fl_mineur == 1 ~ "DISCM",
-                                        fl_qd == 1 & fl_femme == 1 ~ "DISCF",
-                                        fl_qd == 1 ~ "DISCH",
-                                        fl_qi == 1 & fl_mineur == 1 ~ "ISOLM",
-                                        fl_qi == 1 & fl_femme == 1 ~ "ISOLF",
-                                        fl_qi == 1 ~ "ISOLH",
-                                        fl_nurs == 1 ~ "NURS",
-                                        fl_uvf == 1  & fl_femme == 1 ~ "UVFF",
-                                        fl_uvf == 1 ~ "UVFH",
-                                        fl_qcp ==1 ~ "QCP",
-                                        fl_qpr ==1 ~ "QPR",
-                                        fl_udv ==1 ~ "UDV",
-                                        .default = cd_categ_admin_red)
+  mutate(cd_categ_admin_quartier_0 = case_when((cd_type_hebergement == "EPSN"|str_detect(lc_code,"EPSN"))  & 
+                                               cd_etablissement %in% c("00101675","00637851") ~ "MA/QMA", #RED5.3.1 fl_EPSN  par cohérence avec paramétrage
+                                             cd_type_quartier_red == "AUT" & !is.na(cd_type_quartier_etab) ~ cd_type_quartier_etab,
+                                             cd_type_quartier_red == "AUT" & !is.na(cd_type_quartier) ~ cd_type_quartier,
+                                             cd_type_quartier_red == "AUT" & !is.na(cd_type_quartier_lib_ugc) ~ cd_type_quartier_lib_ugc,
+                                             cd_type_quartier_red == "AUT"~ "AUT", 
+                                             .default = cd_type_quartier_red),
+         cd_categ_admin_quartier = case_when(fl_CP == 1 & 
+                                                 str_detect(cd_categ_admin_quartier_0, "^MA|^MC|^CD") ~ paste0("Q",substr(cd_categ_admin_quartier_0,1,2)),
+                                               fl_CP == 1 & 
+                                                 str_detect(cd_categ_admin_quartier_0, "^CSL|^CPA") ~ paste0("Q",substr(cd_categ_admin_quartier_0,2,3)),
+                                               str_detect(cd_categ_admin_quartier_0, "^MA|^MC|^CD") ~ substr(cd_categ_admin_quartier_0,1,2),
+                                               str_detect(cd_categ_admin_quartier_0, "^CSL|^CPA") ~ substr(cd_categ_admin_quartier_0,1,3),
+                                               .default = cd_categ_admin_quartier_0),
+         cd_categ_admin_place = case_when(fl_sl ==1 ~ "SL",
+                                          fl_epsn ==1 ~ "EPSN",
+                                          fl_smpr ==1 ~ "SMPR",
+                                          fl_uhsi ==1 ~ "UHSI",
+                                          fl_uhsa ==1 ~ "UHSA",
+                                          fl_cne ==1 ~ "CNE",
+                                          fl_uat ==1 ~ "UAT",
+                                          fl_cprou ==1 ~ "CPROU",
+                                          fl_qd == 1 ~ "DISC",
+                                          fl_qi == 1 ~ "ISOL",
+                                          fl_nurs == 1 ~ "NURS",
+                                          fl_uvf == 1 ~ "UVF",
+                                          fl_qcp ==1 ~ "QCP",
+                                          fl_qpr ==1 ~ "QPR",
+                                          fl_udv ==1 ~ "UDV",
+                                          fl_arri ==1 ~ "ARRI"
+                                          .default = "NORM"),
+         cd_categ_admin_detenu = case_when(fl_mineur == 1 & fl_femme == 1 ~ "MF",
+                                           fl_mineur == 1 & fl_femme == 0  ~ "MH",
+                                           fl_femme == 1 ~ "F",
+                                           .default = "H"),
+         cd_categ_admin_red = paste(cd_categ_admin_quartier,cd_categ_admin_place, cd_categ_admin_detenu, sep = "_")
   )  
   
 
 ### 2.1.3. Synthèse redressement -----
-resume_ecart <- cellule |> 
-  mutate(difference = case_when(is.na(cd_categ_admin) ~ "3_nvl_info",
-                                cd_categ_admin == cd_categ_admin_red ~ "1_mm_info",
-                                .default = "2_diff_info")
-  ) |> 
-  group_by(difference) |> 
-  summarise(n=n())
-writexl::write_xlsx(resume_ecart,  paste0(path,"Export/resume_ecart.xlsx"))
+# resume_ecart <- cellule |> 
+#   mutate(difference = case_when(is.na(cd_categ_admin) ~ "3_nvl_info",
+#                                 cd_categ_admin == cd_categ_admin_red ~ "1_mm_info",
+#                                 .default = "2_diff_info")
+#   ) |> 
+#   group_by(difference) |> 
+#   summarise(n=n())
+# writexl::write_xlsx(resume_ecart,  paste0(path,"Export/resume_ecart.xlsx"))
 
 tbl_detail_ecart <- cellule |> 
-  mutate(difference = case_when(is.na(cd_categ_admin) ~ "3_nvl_info",
-                                cd_categ_admin == cd_categ_admin_red ~ "1_mm_info",
-                                .default = "2_diff_info")
-  ) |> 
-  group_by(cd_categ_admin,cd_categ_admin_red, difference) |> 
+  group_by(cd_categ_admin,cd_categ_admin_red) |> 
   summarise(n=n()) |> 
-  ungroup() 
+  ungroup() |> 
+  arrange(desc(n))
 writexl::write_xlsx(tbl_detail_ecart, paste0(path,"Export/tbl_detail_ecart.xlsx"))
 
 # test_pb <- cellule %>%  filter(is.na(cd_categ_admin_red) & cd_categ_admin == "EPMSLH")
 
 ### 2.1.4. Export ------
-write_parquet(cellule, paste0(path,"Export/t_dwh_h_cellule_red.parquet"))
+cellule <- data.table(cellule)
+setindexv(cellule,c("id_ugc")) ### Crée index
+setorder(cellule, id_ugc, date_debut) ### Ordonne
+write_parquet(cellule, 
+              paste0(path,"Export/t_dwh_h_cellule_red.parquet"),
+              compression = "zstd")
 
 ## 2.2. Réduire le nombre de lignes -----
 ### RED1 : on attribue date de fin à la ligne suivante
 ### RED2 : on ne garde que les observations avec des changements par id_ugc
 
 ### 2.2.1. Import et data.table ----
-cellule <- read_parquet(paste0(path,"Export/t_dwh_h_cellule_red.parquet"))
+cellule_red <- read_parquet(paste0(path,"Export/t_dwh_h_cellule_red.parquet"))
 
-cellule_red <- data.table(cellule)
+cellule_red <- data.table(cellule_red)
 setkey(cellule_red,id_ugc)
 
 ### 2.2.2. RED1 : date situ
@@ -425,17 +467,22 @@ verif_capa_theo <- cellule_red_etab[flag_validite == "Y" & fl_indisp==0,
                          .(capa_theo = sum(capa_theo)),
                          by = .(cd_etablissement,lc_etab,cd_categ_admin_red)]
 #verif places sas
-verif_capa_theo_sas <- cellule_red_etab[flag_validite == "Y" & fl_indisp==0 & str_detect(cd_categ_admin_red,"SAS[A-Z]$"),
+verif_capa_theo_sas <- cellule_red_etab[flag_validite == "Y" & fl_indisp==0 & str_detect(cd_categ_admin_red,"SAS_NORM"),
                          .(capa_theo = sum(capa_theo)),
                          by = .(cd_etablissement,lc_etab,cd_categ_admin_red)]
 
 ### 2.3.3. Export -----
 ### 
-write_parquet(cellule_red_etab, paste0(path,"Export/cellule_etab.parquet"))
+cellule_red_etab <- data.table(cellule_red_etab)
+setindexv(cellule_red_etab,c("id_ugc")) ### Crée index
+setorder(cellule_red_etab, id_ugc, date_situ_ugc) ### Ordonne
+write_parquet(cellule_red_etab, 
+              paste0(path,"Export/cellule_etab.parquet"),
+              compression = "zstd")
 
-haven::write_dta(cellule_red_etab, 
-                 paste0(path,"Export/cellule_etab.dta"),
-                 version = 14)
+# haven::write_dta(cellule_red_etab, 
+#                  paste0(path,"Export/cellule_etab.dta"),
+#                  version = 14)
 
 
 ## focus SAS MARSEILLE (places manquantes - LE QSL) ---- 
