@@ -6,6 +6,13 @@ editor_options:
 
 # Evaluation des structures d’accompagnement vers la sortie (SAS)
 
+## A FAIRE
+
+-   UGC des détenus : extraire affectation mutation plutôt que
+    situ_penit
+
+-   Incidents et sanctions
+
 ## Plan pénitentiaire (site [ministere](https://www.justice.gouv.fr/plan-15-000-places-prison))
 
 Sur les 15 000 places, le plan prévoit la construction de 21 structures
@@ -30,7 +37,36 @@ nationale, associations…) et le maintien des liens sociaux et familiaux.
 En facilitant ainsi la réinsertion des personnes détenues, les SAS sont
 un moyen efficace de lutter contre la récidive.
 
+Rappel de la doctrine
+
+-   Toute condamnation à une peine de quartier disciplinaire ferme
+    entraîne un retour en détention ordinaire
+
+-   Caractéristiques des éligibles :
+
+    -   Personnes en situation régulière (ou régularisables),
+
+    -   Sans troubles somatiques ou psychiatriques lourds non stabilisés
+        – notamment dans l’optique de pouvoir bénéficier de permissions
+        de sortir.
+
+    -   Privilégier des profils du territoire, ayant vocation à demeurer
+        dans le département à l’issue de leur peine (objectif de
+        réinsertion).
+
+    -   Prioritairement les personnes détenues en maison d’arrêt.
+
 ## Retour de [l'OIP](https://oip.org/analyse/structures-daccompagnement-vers-la-sortie-de-la-theorie-aux-pratiques/)
+
+-   Doctrine claire après la mise en oeuvre de certains SAS donc des
+    particularités locales, par exemple
+
+    -   Affectation possible sans consentement (refus par la SAS de
+        Poitiers)
+
+    -   Avis des JAP sur l'affectation (Poitiers)
+
+    -   Priorité des détenus de MA en question
 
 # Questions évaluatives
 
@@ -45,21 +81,30 @@ un moyen efficace de lutter contre la récidive.
 -   Difficultés :
 
     -   Evolution avant/après
+    -   Certaines SAS créées d'autres issues de reconversion de QPA ou
+        de QSL
 
 ### Question2 -**Faire bénéficier les aménagements à un public éloigné de ces dispositifs**
 
--   Si des publics ne bénéficiant pas d'aménagement habituellement sont
-    orientés en SAS
+-   Jugée efficace si : des publics ne bénéficiant pas d'aménagement
+    habituellement sont orientés en SAS
 
--   Porte sur le déploiement et mise en œuvre de la politique publique
+-   Porte sur : le déploiement et mise en œuvre de la politique publique
 
 ### **Question3 - Faciliter les permisssions de sortie**
 
--   **L**e déploiement et mise en œuvre de la politique
-    publique                                              
+-   Jugée efficace si : les permissions de sorties des personnes en SAS
+    sont supérieurs à celles hors SAS 
 
--   Si les permissions de sorties des personnes en SAS sont supérieurs à
-    celles hors SAS 
+-   Porte sur : le déploiement et mise en œuvre de la politique publique
+
+### Autres questions posées
+
+-   Désencombrement des MA ?
+
+-   SAS "au mérite" ?
+
+-   SAS seulement après MA ?
 
 # Organisation du programme de travail
 
@@ -109,5 +154,3 @@ Genesis est-elle suffisamment propre ?
     -   CP avec SAS vs. établissement non-mixte
 
 -   GEstion des places SL
-
--   
