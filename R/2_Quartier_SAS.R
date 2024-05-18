@@ -210,9 +210,8 @@ pb <- lib_categ_admin |>
 ### Redressements :
 ### RED1 Flags à NA si non-renseignés (2 initialement)
 ### RED2 Etablissement avec quartiers femme ou mineur connu  
-### RED3.1 Indic indisponible (fl_indisp) à partir du statut_ugc AI ou I
+### RED3.1 Indic indisponible (fl_indisp) à partir du statut_ugc AI ou I -> a comprendre
 ### RED4 Capacité théorique 
-###   RED4.1 Si inoccupable, alors capa = 0
 ###   RED4.2 Capa théorique >= capa ope max de l'ugc
 ### RED5 Recalcul cd_type_hebergement
 ###   RED5.1 cd_type_quartier_etab : calculé selon type étab non-mixte (pas CP) sinon NA 
@@ -259,8 +258,7 @@ cellule <- cellule |>
   group_by(id_ugc) |> 
   mutate(capa_ope_max = max(capa_ope, na.rm = T)) |> 
   ungroup() |> 
-  mutate(capa_theo = case_when(fl_indisp == 1 ~ 0, #RED4.1
-                               capa_ope_max > capa_theo ~ capa_ope_max, #RED4.2
+  mutate(capa_theo = case_when(capa_ope_max > capa_theo ~ capa_ope_max, #RED4.2
                                .default = capa_theo)) |> 
   select(-capa_ope_max)
   
@@ -370,7 +368,7 @@ cellule <- cellule |>
                                           fl_qcp ==1 ~ "QCP",
                                           fl_qpr ==1 ~ "QPR",
                                           fl_udv ==1 ~ "UDV",
-                                          fl_arri ==1 ~ "ARRI"
+                                          fl_arri ==1 ~ "ARRI",
                                           .default = "NORM"),
          cd_categ_admin_detenu = case_when(fl_mineur == 1 & fl_femme == 1 ~ "MF",
                                            fl_mineur == 1 & fl_femme == 0  ~ "MH",
@@ -404,15 +402,16 @@ cellule <- data.table(cellule)
 setindexv(cellule,c("id_ugc")) ### Crée index
 setorder(cellule, id_ugc, date_debut) ### Ordonne
 write_parquet(cellule, 
-              paste0(path,"Export/t_dwh_h_cellule_red.parquet"),
+              paste0(path,"Export/h_cellule_red.parquet"),
               compression = "zstd")
-
+gc()
+rm(cellule)
 ## 2.2. Réduire le nombre de lignes -----
 ### RED1 : on attribue date de fin à la ligne suivante
 ### RED2 : on ne garde que les observations avec des changements par id_ugc
 
 ### 2.2.1. Import et data.table ----
-cellule_red <- read_parquet(paste0(path,"Export/t_dwh_h_cellule_red.parquet"))
+cellule_red <- read_parquet(paste0(path,"Export/h_cellule_red.parquet"))
 
 cellule_red <- data.table(cellule_red)
 setkey(cellule_red,id_ugc)
@@ -446,9 +445,6 @@ cellule_red <- cellule_red[ ,`:=`(
                 ),
     ,by = .(id_ugc)]
 
-#suppr cellule
-rm(cellule)
-
 ##2.3. Lien avec etab  -----
 ### 2.3.1. Ref_etab ----
 ref_etab <- open_dataset(paste0(path,"Export/ref_etab_fl.parquet")) |> 
@@ -464,11 +460,13 @@ rm(cellule_red)
 ### 2.3.2. Verif cohérence -----
 #verif place théoriques
 verif_capa_theo <- cellule_red_etab[flag_validite == "Y" & fl_indisp==0,
-                         .(capa_theo = sum(capa_theo)),
+                         .(capa_theo = sum(capa_theo),
+                           nbr_ugc = uniqueN(id_ugc)),
                          by = .(cd_etablissement,lc_etab,cd_categ_admin_red)]
 #verif places sas
 verif_capa_theo_sas <- cellule_red_etab[flag_validite == "Y" & fl_indisp==0 & str_detect(cd_categ_admin_red,"SAS_NORM"),
-                         .(capa_theo = sum(capa_theo)),
+                         .(capa_theo = sum(capa_theo),
+                           nbr_ugc = uniqueN(id_ugc)),
                          by = .(cd_etablissement,lc_etab,cd_categ_admin_red)]
 
 ### 2.3.3. Export -----
