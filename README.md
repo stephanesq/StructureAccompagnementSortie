@@ -68,6 +68,8 @@ Rappel de la doctrine
 
     -   Priorité des détenus de MA en question
 
+    -   Cadre des permissions de sorties
+
 # Questions évaluatives
 
 ### **Question1 - Améliorer le recours aux aménagements de peine**
