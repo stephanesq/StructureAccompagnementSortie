@@ -50,7 +50,7 @@ situ_penit  <- read_parquet(str_glue("{path_dwh}t_dwh_h_situ_penit.parquet"),
 setkey(situ_penit,nm_ecrou_init)
 
 #jointure eligibles
-ecrou_sas_ugc <- situ_penit[suivi_ap, 
+eligible_ugc_penit <- situ_penit[suivi_ap, 
                             on = .(nm_ecrou_init), 
                             nomatch = 0][ #innerjoin
   order(nm_ecrou_init, dt_debut_situ_penit)]
@@ -60,9 +60,9 @@ rm(situ_penit)
 
 ### 1.2.2. RED1 : date situ -----
 # modif var de date : première ou fin de la précédente
-setorder(ecrou_sas_ugc,nm_ecrou_init,dt_debut_situ_penit)
+setorder(eligible_ugc_penit,nm_ecrou_init,dt_debut_situ_penit)
 
-ecrou_sas_ugc[, `:=`(
+eligible_ugc_penit[, `:=`(
   date_situ_ugc = fcoalesce(
     shift(dt_fin_situ_penit, type = "lead"),
     dt_debut_situ_penit)
@@ -70,29 +70,43 @@ ecrou_sas_ugc[, `:=`(
 by = nm_ecrou_init]  
 
 # nettoyage
-ecrou_sas_ugc <- ecrou_sas_ugc[id_ugc_ref > -3,] #id_ugc renseigné
-ecrou_sas_ugc <- ecrou_sas_ugc[,
+eligible_ugc_penit <- eligible_ugc_penit[id_ugc_ref > -3,] #id_ugc renseigné
+eligible_ugc_penit <- eligible_ugc_penit[,
                            `:=`(
                              dt_debut_situ_penit = NULL,
                              dt_fin_situ_penit = NULL
                            )]
 
 ### 1.2.3. Export ----
-write_parquet(ecrou_sas_ugc, paste0(path,"Export/ecrou_sas_ugc.parquet"))
+
+setindexv(eligible_ugc_penit,c("nm_ecrou_init","id_ugc_ref")) ### Crée index
+setorder(eligible_ugc_penit, nm_ecrou_init, date_situ_ugc) ### Ordonne
+
+write_parquet(eligible_ugc_penit, 
+              paste0(path,"Export/eligible_ugc_penit.parquet"),
+              compression = "zstd")
 
 ## 1.3. Info cellule ----
+## 
+### 1.3.1. Jointure avec cellule_red_etab ----
+
+cellule_red_etab <- read_parquet(paste0(path,"Export/cellule_red_etab.parquet"))
+eligible_ugc_penit <- read_parquet(paste0(path,"Export/eligible_ugc_penit.parquet"))
+
 # même id_ugc, info précédente dans table cellule
 by <- join_by(id_ugc_ref == id_ugc, 
               cd_etablissement,
               closest(date_situ_ugc >= date_situ_ugc))
-ecrou_sas_ugc_red <- left_join(ecrou_sas_ugc, 
+#jointure
+eligible_quartier <- left_join(eligible_ugc_penit, 
                                cellule_red_etab |> select(-dt_fermeture, -n, -fl_indisp, -lc_code), 
                                by)
 
-ecrou_sas_ugc_red <- ecrou_sas_ugc_red |> 
+eligible_quartier <- eligible_quartier |> 
   select(-id_ugc_ref_histo, -cd_categ_admin, -date_situ_ugc.y)
 
-test <- ecrou_sas_ugc_red[,
+### 1.3.2. Synthese selon quartier ----
+eligible_quartier <- eligible_quartier[,
                                .(date_situ_ugc = min(date_situ_ugc.x)),
                                .(nm_ecrou_init,cd_etablissement,
                                  qtm_ferme_tacc,dt_ecrou_initial, dt_fin_peine, 
@@ -102,35 +116,42 @@ test <- ecrou_sas_ugc_red[,
                       ]
 
 # eligible pas aménagés
-test2 <- test[is.na(dt_dbt_ap) | dt_dbt_ap > date_situ_ugc,]
+eligible_quartier2 <- eligible_quartier[is.na(dt_dbt_ap) | dt_dbt_ap > date_situ_ugc,]
 # cd_categ_admin renseigné
-test2 <- test2[!is.na(cd_categ_admin_red),]
-setorder(test2,nm_ecrou_init,date_situ_ugc)
-test2[, `:=`(
+eligible_quartier2 <- eligible_quartier2[!is.na(cd_categ_admin_red),]
+setorder(eligible_quartier2,nm_ecrou_init,date_situ_ugc)
+eligible_quartier2[, `:=`(
   date_next_situ_ugc = fcoalesce(
     shift(date_situ_ugc, type = "lag"),
     dt_fin_elig)
 ), 
 by = nm_ecrou_init]  
 
+### 1.3.3. Export ----
+setindexv(eligible_quartier2,c("nm_ecrou_init")) ### Crée index
+setorder(eligible_quartier2, nm_ecrou_init, date_situ_ugc) ### Ordonne
+
+write_parquet(eligible_quartier2, paste0(path,"Export/eligible_quartier.parquet"))
+
+
 ### 5.1.2. Variables nécessaires ------
 ## Durée observation
-test2[, duree_observation := time_length(interval(date_situ_ugc, date_next_situ_ugc), unit = "months")]
+eligible_quartier2[, duree_observation := time_length(interval(date_situ_ugc, date_next_situ_ugc), unit = "months")]
 ## Durée AP + imputer pour éviter égalité avec une décimale
-test2[, duree_ap := time_length(interval(date_situ_ugc, dt_dbt_ap), unit = "months")]
-test2[, duree_ap_impute := duree_ap + runif(.N)]
+eligible_quartier2[, duree_ap := time_length(interval(date_situ_ugc, dt_dbt_ap), unit = "months")]
+eligible_quartier2[, duree_ap_impute := duree_ap + runif(.N)]
 ## Temps
-test2[, time := duree_observation]
-test2[ap == 1, time := duree_ap_impute]
+eligible_quartier2[, time := duree_observation]
+eligible_quartier2[ap == 1, time := duree_ap_impute]
 ## SAS
-test2[, SAS := "hors SAS"]
-test2[str_detect(cd_categ_admin_red,"^SAS"), SAS := "SAS"]
+eligible_quartier2[, SAS := "hors SAS"]
+eligible_quartier2[str_detect(cd_categ_admin_red,"^SAS"), SAS := "SAS"]
 
 
 ## 5.2 Kapman Meier -----
 # https://www.danieldsjoberg.com/ggsurvfit/
 # KM
-p <- survfit2(Surv(time, ap) ~ SAS, data = test2) |>
+p <- survfit2(Surv(time, ap) ~ SAS, data = eligible_quartier2) |>
   ggsurvfit(linewidth = 1) +
   add_confidence_interval() +
   add_risktable() +
