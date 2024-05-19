@@ -8,10 +8,17 @@ editor_options:
 
 ## A FAIRE
 
+#### Données à récupérer
+
 -   UGC des détenus : extraire affectation mutation plutôt que
     situ_penit
 
 -   Incidents et sanctions
+
+#### Traitements à finir
+
+-   Quartier : identifier CNE et ESPN (aujourd'hui dans AUT) et quid UAT
+    ?
 
 ## Plan pénitentiaire (site [ministere](https://www.justice.gouv.fr/plan-15-000-places-prison))
 
