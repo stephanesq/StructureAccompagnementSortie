@@ -9,14 +9,12 @@ path_data = "~/Documents/Recherche/3_Evaluation/_DATA/"
 path_dwh = "~/Documents/Recherche/3_Evaluation/_DATA/INFPENIT/"
 path_ref = "~/Documents/Recherche/3_Evaluation/_DATA/Referentiel/"
 path_ref_ip = "~/Documents/Recherche/3_Evaluation/_DATA/Referentiel/"
-path_capacite = paste0(path,"AUTRES/Places/")
 
 #sur site
 # path = "L:/SDEX/EX3/_EVALUATION_POLITIQUES_PENITENTIAIRES/COMMANDES/2023-06 - SAS - IP1/Donnees/"
 # path_dwh = "L:/SDEX/EX3/_ANALYSES_ET_ETUDES/TABLES_DE_DONNEES/R_import/"
 # path_ref = "L:/SDEX/EX3/_ANALYSES_ET_ETUDES/TABLES_DE_DONNEES/tables_infpenit/"
 # path_ref_ip = "L:/SDEX/EX3/_ANALYSES_ET_ETUDES/TABLES_DE_DONNEES/tables_IP/"
-# path_capacite = "L:/SDEX/EX3/_ANALYSES_ET_ETUDES/TABLES_DE_DONNEES/Tables_Places_ope/"
 
 # 1. Import ------
 ## 1.1. Eligibles -----
@@ -90,7 +88,7 @@ write_parquet(eligible_ugc_penit,
 ## 
 ### 1.3.1. Jointure avec cellule_red_etab ----
 
-cellule_red_etab <- read_parquet(paste0(path,"Export/cellule_red_etab.parquet"))
+cellule_etab <- read_parquet(paste0(path,"Export/cellule_etab.parquet"))
 eligible_ugc_penit <- read_parquet(paste0(path,"Export/eligible_ugc_penit.parquet"))
 
 # même id_ugc, info précédente dans table cellule
@@ -99,27 +97,45 @@ by <- join_by(id_ugc_ref == id_ugc,
               closest(date_situ_ugc >= date_situ_ugc))
 #jointure
 eligible_quartier <- left_join(eligible_ugc_penit, 
-                               cellule_red_etab |> select(-dt_fermeture, -n, -fl_indisp, -lc_code), 
+                               cellule_etab |> select(-dt_fermeture, -n, -fl_indisp, -lc_code), 
                                by)
 
 eligible_quartier <- eligible_quartier |> 
-  select(-id_ugc_ref_histo, -cd_categ_admin, -date_situ_ugc.y)
+  select(-date_situ_ugc.y)
+
+#supprime
+rm(cellule_etab,eligible_ugc_penit)
 
 ### 1.3.2. Synthese selon quartier ----
+### variable synthese quartier
 eligible_quartier <- eligible_quartier[,
+                                       cd_quartier_simple := 
+                                         fcase(str_detect(cd_categ_admin_quartier,"SAS"), "SAS",
+                                               str_detect(cd_categ_admin_quartier,"QPA"), "CPA/QPA",
+                                               str_detect(cd_categ_admin_quartier,"MC"), "MC/QMC",
+                                               str_detect(cd_categ_admin_quartier,"CD"), "CD/QCD",
+                                               str_detect(cd_categ_admin_quartier,"MA"), "MA/QMA",
+                                               str_detect(cd_categ_admin_quartier,"SL"), "CSL/QSL",
+                                               str_detect(cd_categ_admin_quartier,"EPM"), "EPM",
+                                               str_detect(cd_categ_admin_quartier,"AUT"), "AUT")]
+### réduction ligne
+eligible_quartier_ap <- eligible_quartier[,
                                .(date_situ_ugc = min(date_situ_ugc.x)),
                                .(nm_ecrou_init,cd_etablissement,
                                  qtm_ferme_tacc,dt_ecrou_initial, dt_fin_peine, 
                                  dt_dbt_elig, dt_fin_elig, dt_dbt_elig_lsc, dt_dbt_elig_lscd, 
                                  top_lsc, amenagement, dt_dbt_ap, dt_fin_ap, ap, 
-                                cd_categ_admin_red) #capa_theo,
+                                 cd_quartier_simple
+                                ) #cd_categ_admin_red,cd_categ_admin_quartier,cd_categ_admin_place, cd_categ_admin_detenu,capa_theo,
                       ]
 
 # eligible pas aménagés
-eligible_quartier2 <- eligible_quartier[is.na(dt_dbt_ap) | dt_dbt_ap > date_situ_ugc,]
+eligible_quartier_ap <- eligible_quartier[is.na(dt_dbt_ap) | dt_dbt_ap > date_situ_ugc,]
 # cd_categ_admin renseigné
-eligible_quartier2 <- eligible_quartier2[!is.na(cd_categ_admin_red),]
-setorder(eligible_quartier2,nm_ecrou_init,date_situ_ugc)
+eligible_quartier_ap <- eligible_quartier_ap[!is.na(cd_categ_admin_red),]
+
+# temps entre Changement
+setorder(eligible_quartier_ap,nm_ecrou_init,date_situ_ugc)
 eligible_quartier2[, `:=`(
   date_next_situ_ugc = fcoalesce(
     shift(date_situ_ugc, type = "lag"),
@@ -128,10 +144,10 @@ eligible_quartier2[, `:=`(
 by = nm_ecrou_init]  
 
 ### 1.3.3. Export ----
-setindexv(eligible_quartier2,c("nm_ecrou_init")) ### Crée index
-setorder(eligible_quartier2, nm_ecrou_init, date_situ_ugc) ### Ordonne
+setindexv(eligible_quartier_ap,c("nm_ecrou_init")) ### Crée index
+setorder(eligible_quartier_ap, nm_ecrou_init, date_situ_ugc) ### Ordonne
 
-write_parquet(eligible_quartier2, paste0(path,"Export/eligible_quartier.parquet"))
+write_parquet(eligible_quartier_ap, paste0(path,"Export/eligible_quartier_ap.parquet"))
 
 
 ### 5.1.2. Variables nécessaires ------
