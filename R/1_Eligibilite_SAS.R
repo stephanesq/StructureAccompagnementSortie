@@ -254,7 +254,11 @@ eligible_ap <- eligible_ap[DT_FIN_ELIG < DT_SITU_PENALE_MAX &
                              annee_dbt_elig_ap > 2016
                            , ]
 ## Export
-write_parquet(eligible_ap,paste0(path,"Export/eligible_ap.parquet"))
+setindexv(eligible_ap,c("NM_ECROU_INIT")) ### Crée index
+setorder(eligible_ap, NM_ECROU_INIT, DT_DBT_ELIG) ### Ordonne
+write_parquet(eligible_ap,
+              paste0(path,"Export/eligible_ap.parquet"),
+              compression = "zstd")
 
 # 4. Aménagement de peine ----
 ### AP dans situ pénit
@@ -447,7 +451,11 @@ situ_penit_ap <- situ_penit_ap[DT_DBT_AP <= DT_SITU_PENIT_MAX &
                                annee_dbt_ap > 2016
                            , ]
 ## Export
-write_parquet(situ_penit_ap,paste0(path,"Export/situ_penit_ap.parquet"))
+setindexv(situ_penit_ap,c("NM_ECROU_INIT")) ### Crée index
+setorder(situ_penit_ap, NM_ECROU_INIT, DT_DBT_AP) ### Ordonne
+write_parquet(situ_penit_ap,
+              paste0(path,"Export/situ_penit_ap.parquet"),
+              compression = "zstd")
 
 
 # 5. Table finale ----
@@ -501,7 +509,11 @@ suivi_ap <- suivi_ap[, `:=`(
   LEVEECR_LC = NULL 
 )]
 ### 5.3.2. Parquet
-write_parquet(suivi_ap,paste0(path,"Export/suivi_ap.parquet"))
+setindexv(suivi_ap,c("NM_ECROU_INIT")) ### Crée index
+setorder(suivi_ap, NM_ECROU_INIT, DT_DBT_ELIG, DT_DBT_AP) ### Ordonne
+write_parquet(suivi_ap,
+              paste0(path,"Export/suivi_ap.parquet"),
+              compression = "zstd")
 
 # 6. Premières analyses -----
 ## 6.1. Analyse de survie (Larmarange) -----
