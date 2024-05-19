@@ -18,7 +18,7 @@ path_data = "~/Documents/Recherche/3_Evaluation/_DATA/"
 path_dwh = "~/Documents/Recherche/3_Evaluation/_DATA/INFPENIT/"
 path_ref = "~/Documents/Recherche/3_Evaluation/_DATA/Referentiel/"
 path_ref_ip = "~/Documents/Recherche/3_Evaluation/_DATA/Referentiel/"
-path_capacite = paste0(path,"AUTRES/Places/")
+path_capacite = "~/Documents/Recherche/3_Evaluation/_DATA/AUTRES/Places/"
 
 #sur site
 # path = "L:/SDEX/EX3/_EVALUATION_POLITIQUES_PENITENTIAIRES/COMMANDES/2023-06 - SAS - IP1/Donnees/"
@@ -43,7 +43,7 @@ ref_etab <- read_sas(paste0(path_ref_ip, "ref_etab_historisee.sas7bdat")) |>
   arrange(cd_etablissement,desc(dt_fermeture),desc(dt_disp)) |> 
     group_by(cd_etablissement) |> 
     slice(1) |> 
-  select(cd_etablissement, type_etab, lc_etab, dt_fermeture)
+  select(cd_etablissement, type_etab, lc_etab, lc_disp, dt_fermeture)
 
 ### 1.1.2. Liste places ope (SP2) ------
 histo_capa_etab <- openxlsx::read.xlsx(paste0(path_capacite,"capa_ope_sp2_histo.xlsx")) |> 
@@ -156,6 +156,9 @@ srj_sas <- read_parquet(paste0(path,"Export/liste_sas.parquet"))
 #       Sinon, CD_CATEG_ADMIN est complété par 'H'.
 
 ###2.1.1. Retravail table de paramétrage ------
+###PROPOSITION : gestion et suivi par 
+###Règles :
+### 1. Suivi des établissements accueillant (femme/mineurs/smpr/cne)
 ### A partir des capacités remontées par SP2
 ### Questions en suspens : ARRIVANT ?
 ### Cellules hors capacité :
@@ -250,16 +253,19 @@ cellule <- open_dataset(paste0(path_dwh, "t_dwh_h_cellule.parquet")) |>
 #RED2 modif selon types de places et informations sur places dispo (ref_etab et capa de SP2)
 cellule <- cellule |> 
   left_join(read_parquet(paste0(path,"Export/ref_etab_fl.parquet")) |> 
-              select(-dt_fermeture)
+              select(-dt_fermeture, -lc_etab)
   )
   
 #### RED3 Modif capa théorique ------
 cellule <- cellule |> 
+  mutate(across(starts_with("capa_"), ~ if_else(is.na(.),0,.))
+         ) |> #REDXX
   group_by(id_ugc) |> 
   mutate(capa_ope_max = max(capa_ope, na.rm = T)) |> 
   ungroup() |> 
-  mutate(capa_theo = case_when(capa_ope_max > capa_theo ~ capa_ope_max, #RED4.2
-                               .default = capa_theo)) |> 
+  mutate(capa_theo = if_else(capa_ope_max > capa_theo, capa_ope_max, capa_theo), #REDXX
+         capa_ope = if_else(fl_indisp ==1, 0, capa_ope)
+         )|> #REDXX
   select(-capa_ope_max)
   
 #### RED4 Recalcul cd_type_quartier si renseigné pour id_ugc ----
@@ -321,12 +327,13 @@ cellule <- cellule |>
     fl_sl=if_else(cd_type_hebergement == "SL"| cd_type_quartier_red == "CSL/QSL"|str_detect(lc_code,"SL") 
                   ,1
                   ,fl_sl), #RED5.3.2 fl_sl 
-    ### flage sur types de détenus
-    fl_femme = if_else(str_detect(lc_code,"QF") & fl_qf == 1 ,1,fl_femme), #RED1.3
-    fl_mineur = if_else(
-      (str_detect(lc_code,"QM") & fl_qm == 1) | cd_type_quartier_red == "EPM"
-      ,1
-      ,fl_mineur) #RED1.3
+    ### flage sur types de détenus, nécessité de quartier accueillant
+    fl_femme = case_when(fl_qf == 0 ~ 0,
+                         str_detect(lc_code,"QF") & fl_qf == 1 ~ 1,
+                         .default = fl_femme), #RED1.3
+    fl_mineur = case_when(fl_qm == 0 ~ 0,
+                          str_detect(lc_code,"QM") | cd_type_quartier_red == "EPM"~ 1,
+                          .default = fl_mineur) #RED1.3
   ) |> 
   select(-fl_qf,-fl_qm, -fl_qsl) |> 
   #Remplace NA par 0
@@ -438,7 +445,10 @@ cellule_red <- cellule_red[,
 
 cellule_red <- cellule_red[,
                   .(date_situ_ugc = min(date_situ_ugc)),
-                  by = .(id_ugc,lc_code,capa_theo,fl_indisp,fl_hors_capa,cd_categ_admin_red, cd_etablissement, flag_validite)]
+                  by = .(id_ugc,lc_code,capa_theo,capa_ope,
+                         fl_indisp,fl_hors_capa,
+                         cd_categ_admin_red, cd_categ_admin_quartier,cd_categ_admin_place, cd_categ_admin_detenu,
+                         cd_etablissement, flag_validite)]
 #comptage des doublons
 cellule_red <- cellule_red[ ,`:=`( 
                 n=.N #comptage ligne
@@ -448,7 +458,7 @@ cellule_red <- cellule_red[ ,`:=`(
 ##2.3. Lien avec etab  -----
 ### 2.3.1. Ref_etab ----
 ref_etab <- open_dataset(paste0(path,"Export/ref_etab_fl.parquet")) |> 
-  select(cd_etablissement, lc_etab, dt_fermeture) |> 
+  select(cd_etablissement, lc_etab, lc_disp, dt_fermeture) |> 
   collect()
 
 cellule_red_etab <- merge(cellule_red,
@@ -458,16 +468,25 @@ cellule_red_etab <- merge(cellule_red,
 rm(cellule_red)
 
 ### 2.3.2. Verif cohérence -----
-#verif place théoriques
-verif_capa_theo <- cellule_red_etab[flag_validite == "Y" & fl_indisp==0,
-                         .(capa_theo = sum(capa_theo),
-                           nbr_ugc = uniqueN(id_ugc)),
-                         by = .(cd_etablissement,lc_etab,cd_categ_admin_red)]
-#verif places sas
-verif_capa_theo_sas <- cellule_red_etab[flag_validite == "Y" & fl_indisp==0 & str_detect(cd_categ_admin_red,"SAS_NORM"),
-                         .(capa_theo = sum(capa_theo),
-                           nbr_ugc = uniqueN(id_ugc)),
-                         by = .(cd_etablissement,lc_etab,cd_categ_admin_red)]
+### Cellule dispo ce jour
+cellule_actuel <- cellule_red_etab[flag_validite == "Y" & fl_indisp ==0,
+                                   ][, `:=`(
+                                     type_quartier = gsub("_.*$","",cd_categ_admin_red),
+                                     type_cellule = sub(".*?_{+}(.*?)_.*","\\1",cd_categ_admin_red)
+                                     )
+                                   ]
+
+verif_capa_etab <- rollup(cellule_actuel, 
+       j = c(list(count=.N), lapply(.SD, sum)), 
+       by = c("cd_etablissement","lc_etab","cd_categ_admin_red"), 
+       id=TRUE,
+       .SDcols=c("capa_theo","capa_ope"))
+
+verif_capa_type_etab <- rollup(cellule_actuel, 
+                     j = c(list(count=.N), lapply(.SD, sum)), 
+                     by = c("lc_disp","type_quartier","type_cellule"), 
+                     id=TRUE,
+                     .SDcols=c("capa_theo","capa_ope"))
 
 ### 2.3.3. Export -----
 ### 
@@ -478,7 +497,7 @@ write_parquet(cellule_red_etab,
               paste0(path,"Export/cellule_etab.parquet"),
               compression = "zstd")
 
-# haven::write_dta(cellule_red_etab, 
+# haven::write_dta(cellule_red_etab,
 #                  paste0(path,"Export/cellule_etab.dta"),
 #                  version = 14)
 
