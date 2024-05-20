@@ -88,25 +88,41 @@ write_parquet(eligible_ugc_penit,
 ## 
 ### 1.3.1. Jointure avec cellule_red_etab ----
 
-cellule_etab <- read_parquet(paste0(path,"Export/cellule_etab.parquet"))
+#### Cellule etab
+cellule_etab <- read_parquet(paste0(path,"Export/cellule_etab.parquet")) |> 
+  select(-dt_fermeture, -n, -fl_indisp, -lc_code) |> 
+  rename("cellule_date_situ_ugc"="date_situ_ugc")
+
+cellule_etab = data.table(cellule_etab)
+setkey(cellule_etab,id_ugc)
+
+#### eligible_ugc_penit
 eligible_ugc_penit <- read_parquet(paste0(path,"Export/eligible_ugc_penit.parquet"))
 
-# même id_ugc, info précédente dans table cellule
-by <- join_by(id_ugc_ref == id_ugc, 
-              cd_etablissement,
-              closest(date_situ_ugc >= date_situ_ugc))
-#jointure
-eligible_quartier <- left_join(eligible_ugc_penit, 
-                               cellule_etab |> select(-dt_fermeture, -n, -fl_indisp, -lc_code), 
-                               by)
+eligible_ugc_penit = data.table(eligible_ugc_penit)
+setkey(eligible_ugc_penit,nm_ecrou_init,id_ugc_ref)
+
+#jointure avec data.table
+eligible_ugc_penit[cellule_etab,
+                  on=.(id_ugc_ref = id_ugc,
+                       cd_etablissement = cd_etablissement,
+                       date_situ_ugc>=cellule_date_situ_ugc)] # même id_ugc, info précédente dans table cellule
 
 eligible_quartier <- eligible_quartier |> 
-  select(-date_situ_ugc.y)
+  select(-cellule_date_situ_ugc) 
 
 #supprime
 rm(cellule_etab,eligible_ugc_penit)
 
-### 1.3.2. Synthese selon quartier ----
+### 1.3.2. FILL + Synthese selon quartier ----
+
+### FILL cd_categ_admin_quartier
+eligible_quartier <- eligible_quartier |> 
+  group_by(nm_ecrou_init, id_ugc_ref) |> 
+  arrange(date_situ_ugc) |> 
+  fill(cd_categ_admin_quartier, .direction = c("updown")) |> 
+  ungroup() 
+
 ### variable synthese quartier
 eligible_quartier <- eligible_quartier[,
                                        cd_quartier_simple := 
@@ -118,6 +134,10 @@ eligible_quartier <- eligible_quartier[,
                                                str_detect(cd_categ_admin_quartier,"SL"), "CSL/QSL",
                                                str_detect(cd_categ_admin_quartier,"EPM"), "EPM",
                                                str_detect(cd_categ_admin_quartier,"AUT"), "AUT")]
+### Rajout info TJ 
+ref_etab_tgi <- read.csv2(paste0(path_ref,"ep_tgi.csv"),
+                          encoding = "ISO-8859-1")
+
 ### réduction ligne
 eligible_quartier_ap <- eligible_quartier[,
                                .(date_situ_ugc = min(date_situ_ugc.x)),
@@ -130,7 +150,7 @@ eligible_quartier_ap <- eligible_quartier[,
                       ]
 
 # eligible pas aménagés
-eligible_quartier_ap <- eligible_quartier[is.na(dt_dbt_ap) | dt_dbt_ap > date_situ_ugc,]
+eligible_quartier_ap <- eligible_quartier_ap[is.na(dt_dbt_ap) | dt_dbt_ap > date_situ_ugc,]
 # cd_categ_admin renseigné
 eligible_quartier_ap <- eligible_quartier_ap[!is.na(cd_categ_admin_red),]
 
