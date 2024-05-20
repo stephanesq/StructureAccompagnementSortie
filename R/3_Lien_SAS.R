@@ -87,26 +87,35 @@ write_parquet(eligible_ugc_penit,
 ## 1.3. Info cellule ----
 ## 
 ### 1.3.1. Jointure avec cellule_red_etab ----
-
+### jointure avec roll : https://www.r-bloggers.com/2016/06/understanding-data-table-rolling-joins/
 #### Cellule etab
 cellule_etab <- read_parquet(paste0(path,"Export/cellule_etab.parquet")) |> 
-  select(-dt_fermeture, -n, -fl_indisp, -lc_code) |> 
-  rename("cellule_date_situ_ugc"="date_situ_ugc")
+  # select(-dt_fermeture, -n, -fl_indisp, -lc_code, -cd_etablissement) |> 
+  select(id_ugc,date_situ_ugc,cd_categ_admin_red) |> 
+  mutate(cellule_date_situ_ugc = date_situ_ugc) |> 
+  filter(!is.na(cd_categ_admin_red))
 
 cellule_etab = data.table(cellule_etab)
-setkey(cellule_etab,id_ugc)
+
+# cellule_etab[, id_ugc:=as.integer(id_ugc)]
+setkey(cellule_etab,id_ugc,date_situ_ugc)
 
 #### eligible_ugc_penit
-eligible_ugc_penit <- read_parquet(paste0(path,"Export/eligible_ugc_penit.parquet"))
+eligible_ugc_penit <- read_parquet(paste0(path,"Export/eligible_ugc_penit.parquet")) |> 
+  select(nm_ecrou_init,id_ugc_ref,date_situ_ugc)  |> 
+  mutate(situ_date_situ_ugc = date_situ_ugc)
 
 eligible_ugc_penit = data.table(eligible_ugc_penit)
-setkey(eligible_ugc_penit,nm_ecrou_init,id_ugc_ref)
+eligible_ugc_penit[, id_ugc:=(id_ugc_ref)]
+setkey(eligible_ugc_penit,id_ugc,date_situ_ugc)
 
 #jointure avec data.table
-eligible_ugc_penit[cellule_etab,
-                  on=.(id_ugc_ref = id_ugc,
-                       cd_etablissement = cd_etablissement,
-                       date_situ_ugc>=cellule_date_situ_ugc)] # même id_ugc, info précédente dans table cellule
+eligible_quartier <-cellule_etab[eligible_ugc_penit,
+                                 roll=-Inf] #Rolling Backward : précédente info de l'ugc
+                                        # on=.(id_ugc_ref = id_ugc,
+                                        #      cd_etablissement = cd_etablissement,
+                                        #      date_situ_ugc), # même id_ugc, info précédente dans table cellule
+                                        # roll = -Inf]
 
 eligible_quartier <- eligible_quartier |> 
   select(-cellule_date_situ_ugc) 
