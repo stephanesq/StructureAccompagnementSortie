@@ -87,69 +87,64 @@ write_parquet(eligible_ugc_penit,
 ## 1.3. Info cellule ----
 ## 
 ### 1.3.1. Jointure avec cellule_red_etab ----
-### jointure avec roll : https://www.r-bloggers.com/2016/06/understanding-data-table-rolling-joins/
+### jointure avec roll : 
+###   explication la plus claire pour moi : https://cran.r-project.org/web/packages/table.express/vignettes/joins.html
+###   la référence https://www.r-bloggers.com/2016/06/understanding-data-table-rolling-joins/
+###   avec une animation : https://www.gormanalysis.com/blog/r-data-table-rolling-joins/
+###   
 #### Cellule etab
 cellule_etab <- read_parquet(paste0(path,"Export/cellule_etab.parquet")) |> 
   # select(-dt_fermeture, -n, -fl_indisp, -lc_code, -cd_etablissement) |> 
-  select(id_ugc,date_situ_ugc,cd_categ_admin_red) |> 
-  mutate(cellule_date_situ_ugc = date_situ_ugc) |> 
+  select(id_ugc,date_situ_ugc,
+         cd_categ_admin_red, cd_categ_admin_quartier, cd_categ_admin_place) |> 
+  mutate(date_situ_ugc = as.Date(date_situ_ugc)
+         ) |> 
   filter(!is.na(cd_categ_admin_red))
 
+#passage en data.table  
 cellule_etab = data.table(cellule_etab)
-
-# cellule_etab[, id_ugc:=as.integer(id_ugc)]
 setkey(cellule_etab,id_ugc,date_situ_ugc)
 
 #### eligible_ugc_penit
 eligible_ugc_penit <- read_parquet(paste0(path,"Export/eligible_ugc_penit.parquet")) |> 
-  select(nm_ecrou_init,id_ugc_ref,date_situ_ugc)  |> 
-  mutate(situ_date_situ_ugc = date_situ_ugc)
+  select(nm_ecrou_init,cd_etablissement,
+         qtm_ferme_tacc,dt_ecrou_initial, dt_fin_peine, 
+         dt_dbt_elig, dt_fin_elig, dt_dbt_elig_lsc, dt_dbt_elig_lscd, 
+         top_lsc, amenagement, dt_dbt_ap, dt_fin_ap, ap,
+         id_ugc_ref,date_situ_ugc)  |> 
+  mutate(date_situ_ugc = as.Date(date_situ_ugc)) |> 
+  rename("id_ugc" = "id_ugc_ref")
 
+#passage en data.table  
 eligible_ugc_penit = data.table(eligible_ugc_penit)
-eligible_ugc_penit[, id_ugc:=(id_ugc_ref)]
 setkey(eligible_ugc_penit,id_ugc,date_situ_ugc)
 
 #jointure avec data.table
+# rm(eligible_quartier)
 eligible_quartier <-cellule_etab[eligible_ugc_penit,
-                                 roll=-Inf] #Rolling Backward : précédente info de l'ugc
-                                        # on=.(id_ugc_ref = id_ugc,
-                                        #      cd_etablissement = cd_etablissement,
-                                        #      date_situ_ugc), # même id_ugc, info précédente dans table cellule
-                                        # roll = -Inf]
-
-eligible_quartier <- eligible_quartier |> 
-  select(-cellule_date_situ_ugc) 
+                                 roll= T, #dernière info
+                                 rollends = TRUE] #sinon la première info dispo
 
 #supprime
 rm(cellule_etab,eligible_ugc_penit)
 
-### 1.3.2. FILL + Synthese selon quartier ----
-
-### FILL cd_categ_admin_quartier
-eligible_quartier <- eligible_quartier |> 
-  group_by(nm_ecrou_init, id_ugc_ref) |> 
-  arrange(date_situ_ugc) |> 
-  fill(cd_categ_admin_quartier, .direction = c("updown")) |> 
-  ungroup() 
-
+### 1.3.2. Synthese selon quartier ----
+                                       
 ### variable synthese quartier
 eligible_quartier <- eligible_quartier[,
                                        cd_quartier_simple := 
                                          fcase(str_detect(cd_categ_admin_quartier,"SAS"), "SAS",
                                                str_detect(cd_categ_admin_quartier,"QPA"), "CPA/QPA",
+                                               str_detect(cd_categ_admin_quartier,"SL") | cd_categ_admin_place == "SL", "CSL/QSL", # on considère aussi les places SL
                                                str_detect(cd_categ_admin_quartier,"MC"), "MC/QMC",
                                                str_detect(cd_categ_admin_quartier,"CD"), "CD/QCD",
                                                str_detect(cd_categ_admin_quartier,"MA"), "MA/QMA",
-                                               str_detect(cd_categ_admin_quartier,"SL"), "CSL/QSL",
                                                str_detect(cd_categ_admin_quartier,"EPM"), "EPM",
                                                str_detect(cd_categ_admin_quartier,"AUT"), "AUT")]
-### Rajout info TJ 
-ref_etab_tgi <- read.csv2(paste0(path_ref,"ep_tgi.csv"),
-                          encoding = "ISO-8859-1")
 
 ### réduction ligne
 eligible_quartier_ap <- eligible_quartier[,
-                               .(date_situ_ugc = min(date_situ_ugc.x)),
+                               .(date_situ_ugc = min(date_situ_ugc)),
                                .(nm_ecrou_init,cd_etablissement,
                                  qtm_ferme_tacc,dt_ecrou_initial, dt_fin_peine, 
                                  dt_dbt_elig, dt_fin_elig, dt_dbt_elig_lsc, dt_dbt_elig_lscd, 
@@ -158,14 +153,31 @@ eligible_quartier_ap <- eligible_quartier[,
                                 ) #cd_categ_admin_red,cd_categ_admin_quartier,cd_categ_admin_place, cd_categ_admin_detenu,capa_theo,
                       ]
 
+### Rajout info TJ 
+ref_etab_tgi <- read.csv2(paste0(path_ref,"ep_tgi.csv")) |> 
+  clean_names() |> 
+  mutate(cd_etablissement = str_c(sprintf("%08s", n_calc)),
+         cd_tgi = str_c(sprintf("%08s", n_calc_tgi)),
+         .keep = "none") #garder que nouvelle variable
+
+ref_etab_tgi <- data.table(ref_etab_tgi)
+setkey(ref_etab_tgi,cd_etablissement)
+
+## Jointure
+eligible_quartier_ap <- merge(eligible_quartier_ap,
+                          ref_etab_tgi)
+
+### Supprime si pas d'info
+eligible_quartier_ap <- eligible_quartier_ap[!is.na(cd_quartier_simple),]
+
 # eligible pas aménagés
 eligible_quartier_ap <- eligible_quartier_ap[is.na(dt_dbt_ap) | dt_dbt_ap > date_situ_ugc,]
-# cd_categ_admin renseigné
-eligible_quartier_ap <- eligible_quartier_ap[!is.na(cd_categ_admin_red),]
+
 
 # temps entre Changement
 setorder(eligible_quartier_ap,nm_ecrou_init,date_situ_ugc)
-eligible_quartier2[, `:=`(
+
+eligible_quartier_ap[, `:=`(
   date_next_situ_ugc = fcoalesce(
     shift(date_situ_ugc, type = "lag"),
     dt_fin_elig)
@@ -181,22 +193,22 @@ write_parquet(eligible_quartier_ap, paste0(path,"Export/eligible_quartier_ap.par
 
 ### 5.1.2. Variables nécessaires ------
 ## Durée observation
-eligible_quartier2[, duree_observation := time_length(interval(date_situ_ugc, date_next_situ_ugc), unit = "months")]
+eligible_quartier_ap[, duree_observation := time_length(interval(date_situ_ugc, date_next_situ_ugc), unit = "months")]
 ## Durée AP + imputer pour éviter égalité avec une décimale
-eligible_quartier2[, duree_ap := time_length(interval(date_situ_ugc, dt_dbt_ap), unit = "months")]
-eligible_quartier2[, duree_ap_impute := duree_ap + runif(.N)]
+eligible_quartier_ap[, duree_ap := time_length(interval(date_situ_ugc, dt_dbt_ap), unit = "months")]
+eligible_quartier_ap[, duree_ap_impute := duree_ap + runif(.N)]
 ## Temps
-eligible_quartier2[, time := duree_observation]
-eligible_quartier2[ap == 1, time := duree_ap_impute]
+eligible_quartier_ap[, time := duree_observation]
+eligible_quartier_ap[ap == 1, time := duree_ap_impute]
 ## SAS
-eligible_quartier2[, SAS := "hors SAS"]
-eligible_quartier2[str_detect(cd_categ_admin_red,"^SAS"), SAS := "SAS"]
+eligible_quartier_ap[, SAS := "hors SAS"]
+eligible_quartier_ap[str_detect(cd_quartier_simple,"^SAS"), SAS := "SAS"]
 
 
 ## 5.2 Kapman Meier -----
 # https://www.danieldsjoberg.com/ggsurvfit/
-# KM
-p <- survfit2(Surv(time, ap) ~ SAS, data = eligible_quartier2) |>
+### 5.2.1 KM SAS/non SAS
+p <- survfit2(Surv(time, ap) ~ SAS, data = eligible_quartier_ap) |>
   ggsurvfit(linewidth = 1) +
   add_confidence_interval() +
   add_risktable() +
@@ -204,17 +216,28 @@ p <- survfit2(Surv(time, ap) ~ SAS, data = eligible_quartier2) |>
   scale_ggsurvfit()
 p +
   # limit plot to show 24 months and less
-  coord_cartesian(xlim = c(0, 24)) +
+  coord_cartesian(xlim = c(0, 12)) +
   # update figure labels/titles
   labs(
     y = "Pourcentage sans aménagement",
     title = "Temps passé depuis un changement de quartier",
   )
 
-  # contrôle sur les premières apparitions des id_ugc...
-situ_penit[id_ugc_ref > -3, .(min_dt = min(dt_debut_situ_penit), max_dt = max(dt_fin_situ_penit))]
-situ_penit[id_ugc_ref_histo > -3, .(min_dt = min(dt_debut_situ_penit), max_dt = max(dt_fin_situ_penit))]
-# tout s'explique (presque). la variable id_ugc n'existe que depuis janvier 2023, d'où l'impossibilité de trouver des observations avant 2023 en fonction de la cellule. CD_CATEG_ADMIN C PARTI 
+### 5.2.2 KM selon type de quartiers -----
+p <- survfit2(Surv(time, ap) ~ cd_quartier_simple, data = eligible_quartier_ap) |>
+  ggsurvfit(linewidth = 1) +
+  add_confidence_interval() +
+  add_risktable() +
+  add_quantile(y_value = 0.6, color = "gray50", linewidth = 0.75) +
+  scale_ggsurvfit()
+p +
+  # limit plot to show 24 months and less
+  coord_cartesian(xlim = c(0, 12)) +
+  # update figure labels/titles
+  labs(
+    y = "Pourcentage sans aménagement",
+    title = "Temps passé depuis un changement de quartier",
+  )
 
 
 
