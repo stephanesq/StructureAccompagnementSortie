@@ -48,59 +48,74 @@ path_ref = "~/Documents/Recherche/3_Evaluation/_DATA/Referentiel/"
 #   1. Quelle est la date de lib prev quand on est prévenu ?
 #   2. Pourquoi des cas comme 1015280006347
 
+colselect <- toupper(c("nm_ecrou_init", "dt_debut_situ_penale", "dt_fin_situ_penale", 
+                       "cd_cp_globale", "cd_cp_glo_man", "cd_cp_detail", "dt_libe_prev", 
+                       "qtm_ferme_tacc_a", "qtm_ferme_tacc_m", "qtm_ferme_tacc_s", "qtm_ferme_tacc_j"))
 
 t_dwh_h_situ_penale <- open_dataset(paste0(path_dwh,"t_dwh_h_situ_penale.parquet"))  |>
   # Définir la requête
     # Filtre et selection
-    filter(TP_SOURCE == "GENESIS") |>
-    select(NM_ECROU_INIT, DT_DEBUT_SITU_PENALE, DT_FIN_SITU_PENALE, 
-           CD_CP_GLOBALE, CD_CP_GLO_MAN, CD_CP_DETAIL, DT_LIBE_PREV, 
-           QTM_FERME_TACC_A, QTM_FERME_TACC_M, QTM_FERME_TACC_S, QTM_FERME_TACC_J) |>
+  filter(TP_SOURCE == "GENESIS") |>
+    select(colselect) |>
     collect() |>
+  janitor::clean_names() |> 
   
   # changement des formats
   mutate(
-    across(starts_with("DT_"), as.Date),
-    across(starts_with("QTM_"), as.numeric)
+    across(starts_with("dt_"), as.Date),
+    across(starts_with("qtm_"), as.numeric)
     ) |>
-    # Quantum ferme
-    mutate(QTM_FERME_TACC = QTM_FERME_TACC_A * 360 + QTM_FERME_TACC_M * 30 + QTM_FERME_TACC_S * 7 + QTM_FERME_TACC_J) |>
-    select(-QTM_FERME_TACC_A, -QTM_FERME_TACC_M, -QTM_FERME_TACC_S, -QTM_FERME_TACC_J)  |>
-    # Tri pour la suite
-    arrange(NM_ECROU_INIT, DT_DEBUT_SITU_PENALE)  |>
-  
-  group_by(NM_ECROU_INIT) |>
-    # garder date fin en date début
-    mutate(DT_SITU_PENALE = lag(DT_FIN_SITU_PENALE, default = first(DT_DEBUT_SITU_PENALE, na.rm = TRUE))) |>
-  ungroup() |>
-  # on enlève les dates inutiles
-  select(-DT_FIN_SITU_PENALE, -DT_DEBUT_SITU_PENALE) |>
-  # on garde que ligne exploitable (situ < lib_prev et lib_prev dispo)
-  filter(DT_SITU_PENALE <= DT_LIBE_PREV & !is.na(DT_LIBE_PREV)) |>
-  
-  # Catégorie pénale (à partir de la seule situ_penale) 
-  mutate(
-    CD_CP_REDR = as.factor(
-      case_when(
-        ! CD_CP_GLOBALE %in% c('(ND)', '-', '') ~ as.character(CD_CP_GLOBALE),
-        ! CD_CP_GLO_MAN %in% c('(ND)', '-', '') ~ as.character(CD_CP_GLO_MAN),
-        CD_CP_DETAIL %in% c("PR", "PRE", "PRV", "APP", "DAP", "DPO", "OPP", "POU") ~ "PR",
-        .default = "CO"))) |>
-  select(-CD_CP_GLOBALE, -CD_CP_GLO_MAN, -CD_CP_DETAIL)
+    # quantum ferme
+    mutate(qtm_ferme_tacc = qtm_ferme_tacc_a * 360 + qtm_ferme_tacc_m * 30 + qtm_ferme_tacc_s * 7 + qtm_ferme_tacc_j) |>
+    select(-qtm_ferme_tacc_a, -qtm_ferme_tacc_m, -qtm_ferme_tacc_s, -qtm_ferme_tacc_j)  
 
+## passage en data.table
+t_dwh_h_situ_penale = data.table(t_dwh_h_situ_penale)
+setkey(t_dwh_h_situ_penale,nm_ecrou_init, dt_debut_situ_penale)
+setorder(t_dwh_h_situ_penale,nm_ecrou_init, dt_debut_situ_penale)
+
+#Passe la date de fin en date de début de la ligne suivante  
+t_dwh_h_situ_penale[,
+                    first_situ := first(dt_debut_situ_penale), #recupere la 1ere observation
+                    .(nm_ecrou_init)][,
+                                      dt_situ_penale:=fcoalesce(
+                                        shift(dt_fin_situ_penale, type = "lead"),
+                                        first_situ),
+                                      .(nm_ecrou_init)]
+# on enlève les dates inutiles
+t_dwh_h_situ_penale[, `:=`(
+  dt_debut_situ_penale = NULL,
+  dt_fin_situ_penale = NULL,
+  first_situ = NULL)]
+
+# on garde que ligne exploitable (situ < lib_prev et lib_prev dispo)
+t_dwh_h_situ_penale <- t_dwh_h_situ_penale[dt_situ_penale <= dt_libe_prev & !is.na(dt_libe_prev),]
+
+  # catégorie pénale (à partir de la seule situ_penale)
+t_dwh_h_situ_penale[, 
+                    cd_cp_redr := as.factor(
+                      fcase(
+                        !cd_cp_globale %in% c('(nd)', '-', ''), as.character(cd_cp_globale),
+                        !cd_cp_glo_man %in% c('(ND)', '-', ''), as.character(cd_cp_glo_man),
+                        cd_cp_detail %in% c("PR", "PRE", "PRV", "APP", "DAP", "DPO", "OPP", "POU"),  "PR",
+                        default = "CO")) ] 
+# on enlève les dates inutiles
+t_dwh_h_situ_penale[, `:=`(
+  cd_cp_globale = NULL,
+  cd_cp_glo_man = NULL,
+  cd_cp_detail = NULL)]
 
 gc()
-## Date max 
-DT_SITU_PENALE_MAX <- max(t_dwh_h_situ_penale$DT_SITU_PENALE)
+## date max 
+dt_situ_penale_max <- max(t_dwh_h_situ_penale$dt_situ_penale)
 
 
-## 1.2. Date d'écrou initial  ------
-t_dwh_ecrou_init <- open_dataset(paste0(path_dwh,"t_dwh_ecrou_init.parquet"))
-
-t_dwh_ecrou_init <- t_dwh_ecrou_init |>
-  select(NM_ECROU_INIT, DT_ECROU_INITIAL) |>
-  mutate(DT_ECROU_INITIAL=as.Date(DT_ECROU_INITIAL)) |>
-  collect()
+## 1.2. date d'écrou initial  ------
+t_dwh_ecrou_init <- open_dataset(paste0(path_dwh,"t_dwh_ecrou_init.parquet")) |>
+  collect() |>
+  janitor::clean_names() |> 
+  select(nm_ecrou_init, dt_ecrou_initial) |>
+  mutate(dt_ecrou_initial=as.Date(dt_ecrou_initial)) 
 
 t_dwh_ecrou_init <- t_dwh_ecrou_init %>% 
   distinct() 
@@ -110,152 +125,152 @@ t_dwh_ecrou_init <- t_dwh_ecrou_init %>%
 t_dwh_f_mouvement <- open_dataset(paste0(path_dwh,"t_dwh_f_mouvement.parquet"))
 
 t_dwh_f_mouvement <- t_dwh_f_mouvement|>
-  filter(TP_SOURCE ==  "GENESIS") |>
-  filter(CD_TYPE_MOUVEMENT == "LIB" & CD_NATURE_MOUVEMENT == "LEVECR") |>
-  select(NM_ECROU_INIT, DT_MOUVEMENT_REEL,CD_MOTIF_MOUVEMENT) |>
+  filter(tp_source ==  "GENESIS") |>
+  filter(cd_type_mouvement == "LIB" & cd_nature_mouvement == "LEVECR") |>
+  select(nm_ecrou_init, dt_mouvement_reel,cd_motif_mouvement) |>
   collect() |>
 
-  group_by(NM_ECROU_INIT) |>
-  mutate(DT_LEVEECR = max(DT_MOUVEMENT_REEL)) |>
+  group_by(nm_ecrou_init) |>
+  mutate(dt_leveecr = max(dt_mouvement_reel)) |>
   ungroup()  |>
-  filter(DT_LEVEECR==DT_MOUVEMENT_REEL) |> 
-  mutate(DT_LEVEECR=as.Date(DT_LEVEECR),
-         LEVEECR_LC=if_else(str_detect(CD_MOTIF_MOUVEMENT, "^LC") & CD_MOTIF_MOUVEMENT != 'LCTRT',1,0)) |>
-  select(-DT_MOUVEMENT_REEL)
+  filter(dt_leveecr==dt_mouvement_reel) |> 
+  mutate(dt_leveecr=as.Date(dt_leveecr),
+         leveecr_lc=if_else(str_detect(cd_motif_mouvement, "^LC") & cd_motif_mouvement != 'LCTRT',1,0)) |>
+  select(-dt_mouvement_reel)
 
 gc()
 
-#2. Croiser information  ----
+#2. croiser information  ----
 
-##2.1 Levée écrou et LC --------------
+##2.1 levée écrou et lc --------------
 h_situ_penale <- t_dwh_h_situ_penale %>% 
   left_join(t_dwh_f_mouvement) 
 # nettoyage
 rm(t_dwh_f_mouvement,t_dwh_h_situ_penale)
-##2.2. Ecrou init / Elibilite LSC --------------
-# Passage en data.table
+##2.2. ecrou init / elibilite lsc --------------
+# passage en data.table
 # eligibilité en comparant date de mise à l'écrou et date de lib prev
 h_situ_penale <- data.table(h_situ_penale)
 t_dwh_ecrou_init <- data.table(t_dwh_ecrou_init)
 
-# Indexer les tables
-# set the ON clause as keys of the tables:
-setkey(h_situ_penale,NM_ECROU_INIT)
-setkey(t_dwh_ecrou_init,NM_ECROU_INIT)
+# indexer les tables
+# set the on clause as keys of the tables:
+setkey(h_situ_penale,nm_ecrou_init)
+setkey(t_dwh_ecrou_init,nm_ecrou_init)
 
-# Inner join avec date écrou initial nomatch=0 -> autre possibilité merge() de data.table
+# inner join avec date écrou initial nomatch=0 -> autre possibilité merge() de data.table
 h_situ_penale <- h_situ_penale[t_dwh_ecrou_init, nomatch = 0]
 # nettoyage
 rm(t_dwh_ecrou_init)
 
-# Calcul 2/3 de peine + date de fin de peine
+# calcul 2/3 de peine + date de fin de peine
 h_situ_penale[, `:=`(
-  DT_DEUXTIERSDEPEINE = floor_date(
-    time_length(difftime(DT_LIBE_PREV, DT_ECROU_INITIAL), "days") * 2/3 + DT_ECROU_INITIAL,
+  dt_deuxtiersdepeine = floor_date(
+    time_length(difftime(dt_libe_prev, dt_ecrou_initial), "days") * 2/3 + dt_ecrou_initial,
     unit = "day"
   ),
-  DT_DEUX_ANS_AVT = DT_LIBE_PREV - years(2),
-  DT_TROIS_MOIS_AVT = DT_LIBE_PREV - months(3),
-  DT_FIN_PEINE = if_else(LEVEECR_LC == 1, DT_LIBE_PREV,DT_LEVEECR) #date de libération prévisionnelle si sortie pour LC sinon 
+  dt_deux_ans_avt = dt_libe_prev - years(2),
+  dt_trois_mois_avt = dt_libe_prev - months(3),
+  dt_fin_peine = if_else(leveecr_lc == 1, dt_libe_prev,dt_leveecr) #date de libération prévisionnelle si sortie pour lc sinon 
 )]
 
-# Récupére prochaine situ pénale (shift) ou date lib prev si absente (fcoalesce)
-h_situ_penale <- h_situ_penale[order(NM_ECROU_INIT, DT_SITU_PENALE)]
+# récupére prochaine situ pénale (shift) ou date lib prev si absente (fcoalesce)
+h_situ_penale <- h_situ_penale[order(nm_ecrou_init, dt_situ_penale)]
 h_situ_penale[, `:=`(
-  DT_NEXT_SITU_PENALE = fcoalesce(
-    shift(DT_SITU_PENALE, type = "lead"),
-    DT_FIN_PEINE)
+  dt_next_situ_penale = fcoalesce(
+    shift(dt_situ_penale, type = "lead"),
+    dt_fin_peine)
   ), 
-  by = NM_ECROU_INIT]
+  by = nm_ecrou_init]
 
 # calcul éligibilité
 h_situ_penale[, `:=`(
-    ELIGIBLE_AP = fifelse(
-      QTM_FERME_TACC > 0 &
-        QTM_FERME_TACC/360 <= 5 & 
-        DT_DEUX_ANS_AVT <= DT_NEXT_SITU_PENALE
-    , 1L, 0L),
-  ELIGIBLE_LSC = fifelse(
-    QTM_FERME_TACC > 0 &
-      QTM_FERME_TACC/360 <= 5 & 
-      DT_DEUX_ANS_AVT <= DT_NEXT_SITU_PENALE
-    , 1L, 0L),
-  ELIGIBLE_LSCD = fifelse(
-    QTM_FERME_TACC > 0 &
-      QTM_FERME_TACC/360 <= 2 & 
-      DT_TROIS_MOIS_AVT <= DT_NEXT_SITU_PENALE ,1L, 0L) #les parties 1L et 0L correspondent à des entiers littéraux en R, pour éviter que R croit à des décimaux ou autres
+    eligible_ap = fifelse(
+      qtm_ferme_tacc > 0 &
+        qtm_ferme_tacc/360 <= 5 & 
+        dt_deux_ans_avt <= dt_next_situ_penale
+    , 1l, 0l),
+  eligible_lsc = fifelse(
+    qtm_ferme_tacc > 0 &
+      qtm_ferme_tacc/360 <= 5 & 
+      dt_deux_ans_avt <= dt_next_situ_penale
+    , 1l, 0l),
+  eligible_lscd = fifelse(
+    qtm_ferme_tacc > 0 &
+      qtm_ferme_tacc/360 <= 2 & 
+      dt_trois_mois_avt <= dt_next_situ_penale ,1l, 0l) #les parties 1l et 0l correspondent à des entiers littéraux en r, pour éviter que r croit à des décimaux ou autres
   )]
 
 
-#3. Eligibilité AP/LSC/LSC-D ---------
-##3.1. ELIG_AP -------
-## Période d'éligibilité à un aménagement de peine (unique par NM_ECROU_INIT)
-### Créer une colonne pour les groupes consécutifs de ELIG == 1 (séparés par des lignes ELIG =0)
-### cumsum(ELIG==0) crée un groupe cumulatif (1, 1, 2, 2, 2, 2, 1, 2, 2, 2, 2) basé sur les indices où ELIG est égal à 0
-eligible_ap <- h_situ_penale[, group := cumsum(ELIGIBLE_AP==0)]
-## rleid() crée un identifiant unique pour chaque groupe distinct par ID
-eligible_ap[, group := rleid(group), by=NM_ECROU_INIT]
+#3. eligibilité ap/lsc/lsc-d ---------
+##3.1. elig_ap -------
+## période d'éligibilité à un aménagement de peine (unique par nm_ecrou_init)
+### créer une colonne pour les groupes consécutifs de elig == 1 (séparés par des lignes elig =0)
+### cumsum(elig==0) crée un groupe cumulatif (1, 1, 2, 2, 2, 2, 1, 2, 2, 2, 2) basé sur les indices où elig est égal à 0
+eligible_ap <- h_situ_penale[, group := cumsum(eligible_ap==0)]
+## rleid() crée un identifiant unique pour chaque groupe distinct par id
+eligible_ap[, group := rleid(group), by=nm_ecrou_init]
 ## supprime
-eligible_ap <-eligible_ap[ELIGIBLE_AP==1,]
-## Dates début et fin
+eligible_ap <-eligible_ap[eligible_ap==1,]
+## dates début et fin
 ### 
-eligible_ap <- eligible_ap[order(NM_ECROU_INIT, DT_SITU_PENALE, group)]
-setkeyv(eligible_ap,c("NM_ECROU_INIT","group"))
+eligible_ap <- eligible_ap[order(nm_ecrou_init, dt_situ_penale, group)]
+setkeyv(eligible_ap,c("nm_ecrou_init","group"))
 ### 
 eligible_ap[, `:=`(
-  DT_DBT_ELIG = first(DT_SITU_PENALE),
-  DT_FIN_ELIG = last(DT_NEXT_SITU_PENALE))
-            , by=.(NM_ECROU_INIT,group)]
-### Garde qu'une ligne
-eligible_ap <- eligible_ap[, .SD[1], by=.(NM_ECROU_INIT,group)] # extract first row of groups.
+  dt_dbt_elig = first(dt_situ_penale),
+  dt_fin_elig = last(dt_next_situ_penale))
+            , by=.(nm_ecrou_init,group)]
+### garde qu'une ligne
+eligible_ap <- eligible_ap[, .sd[1], by=.(nm_ecrou_init,group)] # extract first row of groups.
 ### créé un compteur d'éligibilité
 eligible_ap <- eligible_ap[ ,  `:=`( 
-  group = seq(.N),
-  nb_group = .N,
-  annee_dbt_elig_ap = year(DT_DBT_ELIG))
-  , by = .(NM_ECROU_INIT)]
+  group = seq(.n),
+  nb_group = .n,
+  annee_dbt_elig_ap = year(dt_dbt_elig))
+  , by = .(nm_ecrou_init)]
 # table(eligible_ap$group)
 # 1      2 
 # 660756      1
-### Qu'écrou avec un seul SPELL d'éligibilité
+### qu'écrou avec un seul spell d'éligibilité
 eligible_ap <- eligible_ap[nb_group == 1, ]
-### Enleve les colonnes inutiles
+### enleve les colonnes inutiles
 eligible_ap <- eligible_ap[, `:=`(
   group = NULL,
   nb_group = NULL,
-  DT_SITU_PENALE = NULL,
-  DT_NEXT_SITU_PENALE = NULL,
-  ELIGIBLE_AP = NULL
+  dt_situ_penale = NULL,
+  dt_next_situ_penale = NULL,
+  eligible_ap = NULL
 )]
 # nettoyage
 rm(h_situ_penale)
-## 3.2 ELIG LSC(-D) ------
-## Pour LSC, dépend uniquement de l'éligibilité et de la date
-## Pour LSC-D, manque d'autres infos, pas dispo à ce stade
+## 3.2 elig lsc(-d) ------
+## pour lsc, dépend uniquement de l'éligibilité et de la date
+## pour lsc-d, manque d'autres infos, pas dispo à ce stade
 eligible_ap <- eligible_ap[, `:=`(
-  DT_DBT_ELIG_LSC = fifelse(
-    ELIGIBLE_LSC == 1 & DT_DEUXTIERSDEPEINE <= DT_FIN_ELIG, 
-    pmax(DT_DEUXTIERSDEPEINE, DT_DBT_ELIG), # pour éviter de prendre une date avant le début de l'éligibilité à l'AP
-    NA_Date_), #vide sinon
-  DT_DBT_ELIG_LSCD = fifelse(
-    ELIGIBLE_LSCD == 1 & DT_TROIS_MOIS_AVT <= DT_FIN_ELIG, 
-    pmax(DT_TROIS_MOIS_AVT, DT_DBT_ELIG), 
-    NA_Date_),
-  DT_DEUXTIERSDEPEINE = NULL,
-  DT_TROIS_MOIS_AVT = NULL,
-  ELIGIBLE_LSC = NULL,
-  ELIGIBLE_LSCD = NULL
+  dt_dbt_elig_lsc = fifelse(
+    eligible_lsc == 1 & dt_deuxtiersdepeine <= dt_fin_elig, 
+    pmax(dt_deuxtiersdepeine, dt_dbt_elig), # pour éviter de prendre une date avant le début de l'éligibilité à l'ap
+    NA_date_), #vide sinon
+  dt_dbt_elig_lscd = fifelse(
+    eligible_lscd == 1 & dt_trois_mois_avt <= dt_fin_elig, 
+    pmax(dt_trois_mois_avt, dt_dbt_elig), 
+    NA_date_),
+  dt_deuxtiersdepeine = NULL,
+  dt_trois_mois_avt = NULL,
+  eligible_lsc = NULL,
+  eligible_lscd = NULL
 )]
 ## 3.3 Filtre et export -----
 ## Filtres : 
 ##  - pas de date de fin postérieure à la date de chargement des données
 ##  - pas d'éligibilité avant 2016 (compris)
-eligible_ap <- eligible_ap[DT_FIN_ELIG < DT_SITU_PENALE_MAX &
+eligible_ap <- eligible_ap[dt_fin_elig < dt_situ_penale_max &
                              annee_dbt_elig_ap > 2016
                            , ]
-## Export
-setindexv(eligible_ap,c("NM_ECROU_INIT")) ### Crée index
-setorder(eligible_ap, NM_ECROU_INIT, DT_DBT_ELIG) ### Ordonne
+## export
+setindexv(eligible_ap,c("nm_ecrou_init")) ### Crée index
+setorder(eligible_ap, nm_ecrou_init, dt_dbt_elig) ### Ordonne
 write_parquet(eligible_ap,
               paste0(path,"Export/eligible_ap.parquet"),
               compression = "zstd")
@@ -268,191 +283,191 @@ write_parquet(eligible_ap,
 ## 4.1 Import -----
 ## Redressement avec les règles de gestion
 t_dwh_h_situ_penit <- open_dataset(paste0(path_dwh,"t_dwh_h_situ_penit.parquet")) |> 
-  filter(TOP_ECROUE == 1) |>  
+  filter(top_ecroue == 1) |>  
   collect()
 
 t_dwh_h_situ_penit <- t_dwh_h_situ_penit |> 
-  select(NM_ECROU_INIT,
-       DT_DEBUT_SITU_PENIT,DT_FIN_SITU_PENIT,
-       CD_MOTIF_HEBERGEMENT,TOP_HEBERGE,CD_STATUT_SEMI_LIBERTE, CD_CATEG_ADMIN,
-       TOP_LSC, CD_TYPE_AMENAGEMENT, CD_AMENAGEMENT_PEINE, 
-       DT_DEBUT_EXEC,DT_SUSPSL, 
-       ID_UGC_REF) |>
-  # Redressement aménagement de peine
-  mutate(top_detention = if_else(CD_MOTIF_HEBERGEMENT %in% c('PE','PSEM','PSE','SEFIP','DDSE'),0,1),    
+  select(nm_ecrou_init,
+       dt_debut_situ_penit,dt_fin_situ_penit,
+       cd_motif_hebergement,top_heberge,cd_statut_semi_liberte, cd_categ_admin,
+       top_lsc, cd_type_amenagement, cd_amenagement_peine, 
+       dt_debut_exec,dt_suspsl, 
+       id_ugc_ref) |>
+  # redressement aménagement de peine
+  mutate(top_detention = if_else(cd_motif_hebergement %in% c('PE','PSEM','PSE','SEFIP','DDSE'),0,1),    
          AMENAGEMENT = case_when(
-           top_detention==0 & CD_MOTIF_HEBERGEMENT %in% c('PSE', 'PSEM', 'SEFIP') ~ "DDSE", #PSE
-           top_detention==0 & CD_MOTIF_HEBERGEMENT == 'DDSE'  ~ "DDSE",
-           top_detention==0 & CD_MOTIF_HEBERGEMENT == "PE" ~ "PE_nheb",
-           top_detention==0 & CD_TYPE_AMENAGEMENT %in% c('PSE', 'PSEM', 'SEFIP') ~ "DDSE", #PSE
-           top_detention==0 & CD_TYPE_AMENAGEMENT == 'DDSE' ~ "DDSE",
-           top_detention==0 & CD_TYPE_AMENAGEMENT == 'PE' ~ "PE_nheb",
-           top_detention==1 & CD_AMENAGEMENT_PEINE == "PE" ~ "PE_heb",
-           top_detention==1 & CD_AMENAGEMENT_PEINE == "SL" & (CD_STATUT_SEMI_LIBERTE == "O" | str_detect(CD_CATEG_ADMIN, "SL")) ~ "SL",
-           top_detention==1 & CD_TYPE_AMENAGEMENT == "SL" & (CD_STATUT_SEMI_LIBERTE == "O" | str_detect(CD_CATEG_ADMIN, "SL")) ~ "SL",
+           top_detention==0 & cd_motif_hebergement %in% c('PSE', 'PSEM', 'SEFIP') ~ "DDSE", #PSE
+           top_detention==0 & cd_motif_hebergement == 'DDSE'  ~ "DDSE",
+           top_detention==0 & cd_motif_hebergement == "PE" ~ "PE_nheb",
+           top_detention==0 & cd_type_amenagement %in% c('PSE', 'PSEM', 'SEFIP') ~ "DDSE", #PSE
+           top_detention==0 & cd_type_amenagement == 'DDSE' ~ "DDSE",
+           top_detention==0 & cd_type_amenagement == 'PE' ~ "PE_nheb",
+           top_detention==1 & cd_amenagement_peine == "PE" ~ "PE_heb",
+           top_detention==1 & cd_amenagement_peine == "SL" & (cd_statut_semi_liberte == "O" | str_detect(cd_categ_admin, "SL")) ~ "SL",
+           top_detention==1 & cd_type_amenagement == "SL" & (cd_statut_semi_liberte == "O" | str_detect(cd_categ_admin, "SL")) ~ "SL",
            .default = NA_character_
          )) %>% 
   # Pas possible de filtrer maintenant à cause des problèmes de décalage de date des début de situ penit
   # filter(!is.na(AMENAGEMENT)) |> 
-  select(-top_detention, -CD_MOTIF_HEBERGEMENT, -CD_TYPE_AMENAGEMENT, -CD_AMENAGEMENT_PEINE,-CD_STATUT_SEMI_LIBERTE,-CD_CATEG_ADMIN,-TOP_HEBERGE) |>
+  select(-top_detention, -cd_motif_hebergement, -cd_type_amenagement, -cd_amenagement_peine,-cd_statut_semi_liberte,-cd_categ_admin,-top_heberge) |>
   collect() 
 # table(T_DWH_H_SITU_PENIT$TOP_ECROUE,T_DWH_H_SITU_PENIT$TOP_SORTIE_DEF)
 
 ## 4.2 Modification ------
 ## Récupérer les écrous de la table précédente
 h_situ_penit <- open_dataset(paste0(path,"Export/eligible_ap.parquet")) |>  
-  select(NM_ECROU_INIT) |> 
+  select(nm_ecrou_init) |> 
   collect() |> 
     inner_join(t_dwh_h_situ_penit) |> 
     distinct() 
-## Enlève t_dwh
+## enlève t_dwh
 rm(t_dwh_h_situ_penit)
-### Passage en data.table
+### passage en data.table
 h_situ_penit <- data.table(h_situ_penit)
-setkey(h_situ_penit,NM_ECROU_INIT)
+setkey(h_situ_penit,nm_ecrou_init)
 
-### 4.2.2. Changement organisation table (data.table) -----
-# Décalage puis que aménagement et que bonne date
+### 4.2.2. changement organisation table (data.table) -----
+# décalage puis que aménagement et que bonne date
 # fill using first : https://rdatatable.gitlab.io/data.table/reference/shift.html
-h_situ_penit <- h_situ_penit[order(NM_ECROU_INIT, DT_DEBUT_SITU_PENIT)]
-h_situ_penit[ , DT_SITU_PENIT := 
+h_situ_penit <- h_situ_penit[order(nm_ecrou_init, dt_debut_situ_penit)]
+h_situ_penit[ , dt_situ_penit := 
                 as.Date(
-                  shift(DT_FIN_SITU_PENIT, 
-                        fill=DT_DEBUT_SITU_PENIT[1L], 
+                  shift(dt_fin_situ_penit, 
+                        fill=dt_debut_situ_penit[1l], 
                         n=1, 
                         type="lag")
                 )
-            , by=NM_ECROU_INIT]
+            , by=nm_ecrou_init]
 # supprime les intervalles
 h_situ_penit <- h_situ_penit[,`:=`(
-  DT_DEBUT_SITU_PENIT=NULL,
-  DT_FIN_SITU_PENIT=NULL,
-  DT_DEBUT_EXEC = as.Date(DT_DEBUT_EXEC),
-  DT_SUSPSL = as.Date(DT_SUSPSL)
+  dt_debut_situ_penit=NULL,
+  dt_fin_situ_penit=NULL,
+  dt_debut_exec = as.Date(dt_debut_exec),
+  dt_suspsl = as.Date(dt_suspsl)
 )]
 # dédoublonne et tri
 h_situ_penit <- unique(h_situ_penit)
-h_situ_penit <- h_situ_penit[order(NM_ECROU_INIT, DT_SITU_PENIT)]
+h_situ_penit <- h_situ_penit[order(nm_ecrou_init, dt_situ_penit)]
 # identifier les périodes avec aménagement
-# utiliser les DT_DEBUT_EXEC et les DT_SUSPSL pour modifier ces périodes
+# utiliser les dt_debut_exec et les dt_suspsl pour modifier ces périodes
 h_situ_penit <- h_situ_penit[,`:=`(
-  DT_SITU_PENIT = fifelse(
-    !is.na(DT_DEBUT_EXEC) & !is.na(AMENAGEMENT) & #date et aménagement renseigné
-      DT_DEBUT_EXEC>DT_SITU_PENIT & 
-      ( DT_DEBUT_EXEC <= shift(DT_SITU_PENIT, n=1, type="lead") | 
-        is.na(shift(DT_SITU_PENIT, n=1, type="lead"))
+  dt_situ_penit = fifelse(
+    !is.na(dt_debut_exec) & !is.na(amenagement) & #date et aménagement renseigné
+      dt_debut_exec>dt_situ_penit & 
+      ( dt_debut_exec <= shift(dt_situ_penit, n=1, type="lead") | 
+        is.na(shift(dt_situ_penit, n=1, type="lead"))
       ) #si la date de début d'exécution commence avant la ligne suivante ou qu'il n'y en a pas
-    ,DT_DEBUT_EXEC
-    ,DT_SITU_PENIT
+    ,dt_debut_exec
+    ,dt_situ_penit
   ),
-  AMENAGEMENT = fifelse(
-    !is.na(DT_DEBUT_EXEC) & !is.na(AMENAGEMENT) & #date et aménagement renseigné
-      DT_DEBUT_EXEC>DT_SITU_PENIT & 
-      ( DT_DEBUT_EXEC <= shift(DT_SITU_PENIT, n=1, type="lead") | 
-          is.na(shift(DT_SITU_PENIT, n=1, type="lead"))
+  amenagement = fifelse(
+    !is.na(dt_debut_exec) & !is.na(amenagement) & #date et aménagement renseigné
+      dt_debut_exec>dt_situ_penit & 
+      ( dt_debut_exec <= shift(dt_situ_penit, n=1, type="lead") | 
+          is.na(shift(dt_situ_penit, n=1, type="lead"))
       ) #si la date de début d'exécution commence avant la ligne suivante ou qu'il n'y en a pas
     , NA_character_
-    , AMENAGEMENT
+    , amenagement
     ))]
 # pareil avec suspension 
 h_situ_penit <- h_situ_penit[,`:=`(
-  DT_SITU_PENIT = fifelse(
-    !is.na(DT_SUSPSL) & !is.na(AMENAGEMENT) & year(DT_SUSPSL)>1900 & #date et aménagement renseigné
-      DT_SUSPSL>=DT_SITU_PENIT & (
-        DT_SUSPSL <= shift(DT_SITU_PENIT, n=1, type="lead") | 
-        is.na(shift(DT_SITU_PENIT, n=1, type="lead"))
+  Dt_situ_penit = fifelse(
+    !is.na(dt_suspsl) & !is.na(amenagement) & year(dt_suspsl)>1900 & #date et aménagement renseigné
+      dt_suspsl>=dt_situ_penit & (
+        dt_suspsl <= shift(dt_situ_penit, n=1, type="lead") | 
+        is.na(shift(dt_situ_penit, n=1, type="lead"))
               )
-    ,DT_SUSPSL
-    ,DT_SITU_PENIT
+    ,dt_suspsl
+    ,dt_situ_penit
   ),
-  AMENAGEMENT = fifelse(
-      !is.na(DT_SUSPSL) & !is.na(AMENAGEMENT) & year(DT_SUSPSL)>1900 & #date et aménagement renseigné
-        DT_SUSPSL>=DT_SITU_PENIT & (
-          DT_SUSPSL <= shift(DT_SITU_PENIT, n=1, type="lead") | 
-            is.na(shift(DT_SITU_PENIT, n=1, type="lead"))
+  amenagement = fifelse(
+      !is.na(dt_suspsl) & !is.na(amenagement) & year(dt_suspsl)>1900 & #date et aménagement renseigné
+        dt_suspsl>=dt_situ_penit & (
+          dt_suspsl <= shift(dt_situ_penit, n=1, type="lead") | 
+            is.na(shift(dt_situ_penit, n=1, type="lead"))
         )
       ,NA_character_
-      ,AMENAGEMENT
+      ,amenagement
     ),
-  INDIC_AMENAGEMENT = fifelse(is.na(AMENAGEMENT),0,1)
+  indic_amenagement = fifelse(is.na(amenagement),0,1)
   )]
 # supprime les intervalles
 h_situ_penit <- h_situ_penit[,`:=`(
-  DT_DEBUT_EXEC=NULL,
-  DT_SUSPSL=NULL
+  dt_debut_exec=NULL,
+  dt_suspsl=NULL
 )]
 ## 4.3 Phase d'AP ------
 ### 4.3.1 Date suivante ou levée d'écrou ------
 # libération -> data.table
 f_levecr <- open_dataset(paste0(path_dwh,"t_dwh_f_mouvement.parquet")) |>
-  filter(TP_SOURCE ==  "GENESIS") |>
-  filter(CD_TYPE_MOUVEMENT == "LIB" & CD_NATURE_MOUVEMENT == "LEVECR") |>
-  select(NM_ECROU_INIT, DT_MOUVEMENT_REEL) |>
-    group_by(NM_ECROU_INIT) |>
-    summarise(DT_LEVEECR = max(DT_MOUVEMENT_REEL)) |>
+  filter(tp_source ==  "GENESIS") |>
+  filter(cd_type_mouvement == "LIB" & cd_nature_mouvement == "LEVECR") |>
+  select(nm_ecrou_init, dt_mouvement_reel) |>
+    group_by(nm_ecrou_init) |>
+    summarise(dt_leveecr = max(dt_mouvement_reel)) |>
   collect() 
-### Passage en data.table
+### passage en data.table
 f_levecr <- data.table(f_levecr)
-setkey(f_levecr,NM_ECROU_INIT)  
-### Récupérer l'info puis supprile
+setkey(f_levecr,nm_ecrou_init)  
+### récupérer l'info puis supprile
 h_situ_penit <- merge(h_situ_penit,f_levecr)
 rm(f_levecr)
-# Date suivante/levée d'écrou pour la penit -> afin d'avoir une date de fin si besoin
+# date suivante/levée d'écrou pour la penit -> afin d'avoir une date de fin si besoin
 h_situ_penit[, `:=`(
-  DT_NEXT_SITU_PENIT = fcoalesce(
-    shift(DT_SITU_PENIT, type = "lead"),
-    as.Date(DT_LEVEECR))
-), by = NM_ECROU_INIT]
+  dt_next_situ_penit = fcoalesce(
+    shift(dt_situ_penit, type = "lead"),
+    as.Date(dt_leveecr))
+), by = nm_ecrou_init]
 gc()
-### 4.2.3. Phase d'AP ------
-## Période d'éligibilité à un aménagement de peine (unique par NM_ECROU_INIT)
-### Créer une colonne pour les groupes consécutifs de ELIG == 1 (séparés par des lignes ELIG =0)
-### cumsum(ELIG==0) crée un groupe cumulatif (1, 1, 2, 2, 2, 2, 1, 2, 2, 2, 2) basé sur les indices où ELIG est égal à 0
-situ_penit_ap <- h_situ_penit[, group := cumsum(INDIC_AMENAGEMENT==0)]
+### 4.2.3. phase d'ap ------
+## période d'éligibilité à un aménagement de peine (unique par nm_ecrou_init)
+### créer une colonne pour les groupes consécutifs de elig == 1 (séparés par des lignes elig =0)
+### cumsum(elig==0) crée un groupe cumulatif (1, 1, 2, 2, 2, 2, 1, 2, 2, 2, 2) basé sur les indices où elig est égal à 0
+situ_penit_ap <- h_situ_penit[, group := cumsum(indic_amenagement==0)]
 rm(h_situ_penit)
-## rleid() crée un identifiant unique pour chaque groupe distinct par ID
-situ_penit_ap[, group := rleid(group), by=NM_ECROU_INIT]
+## rleid() crée un identifiant unique pour chaque groupe distinct par id
+situ_penit_ap[, group := rleid(group), by=nm_ecrou_init]
 ## supprime
-situ_penit_ap <-situ_penit_ap[INDIC_AMENAGEMENT==1,]
-## Dates début et fin
+situ_penit_ap <-situ_penit_ap[indic_amenagement==1,]
+## dates début et fin
 ### 
-situ_penit_ap <- situ_penit_ap[order(NM_ECROU_INIT, DT_SITU_PENIT, group)]
-setkeyv(situ_penit_ap,c("NM_ECROU_INIT","group"))
+situ_penit_ap <- situ_penit_ap[order(nm_ecrou_init, dt_situ_penit, group)]
+setkeyv(situ_penit_ap,c("nm_ecrou_init","group"))
 ### 
 situ_penit_ap[, `:=`(
-  DT_DBT_AP = first(DT_SITU_PENIT),
-  DT_FIN_AP= last(DT_NEXT_SITU_PENIT))
-  , by=.(NM_ECROU_INIT,group)]
-### Garde qu'une ligne
-situ_penit_ap <- situ_penit_ap[, .SD[1], by=.(NM_ECROU_INIT,group)] # extract first row of groups.
+  dt_dbt_ap = first(dt_situ_penit),
+  dt_fin_ap= last(dt_next_situ_penit))
+  , by=.(nm_ecrou_init,group)]
+### garde qu'une ligne
+situ_penit_ap <- situ_penit_ap[, .sd[1], by=.(nm_ecrou_init,group)] # extract first row of groups.
 ### créé un compteur d'éligibilité
 situ_penit_ap <- situ_penit_ap[ ,  `:=`( 
   group = seq(.N),
   nb_group = .N,
-  annee_dbt_ap = year(DT_DBT_AP))
-  , by = .(NM_ECROU_INIT)]
+  annee_dbt_ap = year(dt_dbt_ap))
+  , by = .(nm_ecrou_init)]
 # table(situ_penit_ap$group)
 # 1      2      3      4      5      6      7      8      9     10 
 # 241888  11521   1257    188     37     13      6      4      2      1 
-### QConserve que la première phase d'AP -> pour l'instant pas besoin 
+### qconserve que la première phase d'ap -> pour l'instant pas besoin 
 # situ_penit_ap <- situ_penit_ap[group == 1, ]
-### Enleve les colonnes inutiles
-DT_SITU_PENIT_MAX <- max(situ_penit_ap$DT_SITU_PENIT)
+### enleve les colonnes inutiles
+dt_situ_penit_max <- max(situ_penit_ap$dt_situ_penit)
 situ_penit_ap <- situ_penit_ap[, `:=`(
-  DT_SITU_PENIT = NULL,
-  DT_NEXT_SITU_PENIT = NULL,
-  INDIC_AMENAGEMENT = NULL
+  dt_situ_penit = NULL,
+  dt_next_situ_penit = NULL,
+  indic_amenagement = NULL
 )]
-## 4.4 Filtre et export -----
-## Filtres : 
+## 4.4 filtre et export -----
+## filtres : 
 ##  - pas de date de fin postérieure à la date de chargement des données
 ##  - pas d'éligibilité avant 2016 (compris)
-situ_penit_ap <- situ_penit_ap[DT_DBT_AP <= DT_SITU_PENIT_MAX &
+situ_penit_ap <- situ_penit_ap[dt_dbt_ap <= dt_situ_penit_max &
                                annee_dbt_ap > 2016
                            , ]
-## Export
-setindexv(situ_penit_ap,c("NM_ECROU_INIT")) ### Crée index
-setorder(situ_penit_ap, NM_ECROU_INIT, DT_DBT_AP) ### Ordonne
+## export
+setindexv(situ_penit_ap,c("nm_ecrou_init")) ### crée index
+setorder(situ_penit_ap, nm_ecrou_init, dt_dbt_ap) ### Ordonne
 write_parquet(situ_penit_ap,
               paste0(path,"Export/situ_penit_ap.parquet"),
               compression = "zstd")
@@ -461,39 +476,39 @@ write_parquet(situ_penit_ap,
 # 5. Table finale ----
 ## 5.1. Import -----
 suivi_ap <-  open_dataset(paste0(path,"Export/eligible_ap.parquet")) |>
-  select(-annee_dbt_elig_ap, -DT_DEUX_ANS_AVT) |> 
+  select(-annee_dbt_elig_ap, -dt_deux_ans_avt) |> 
   collect() |> 
   left_join(
     open_dataset(paste0(path,"Export/situ_penit_ap.parquet")) |> 
-      select(-DT_LEVEECR, -annee_dbt_ap) |> 
+      select(-dt_leveecr, -annee_dbt_ap) |> 
       collect(),
-    by = join_by(NM_ECROU_INIT,
-                 closest(DT_DBT_ELIG <= DT_DBT_AP))
+    by = join_by(nm_ecrou_init,
+                 closest(dt_dbt_elig <= dt_dbt_ap))
   ) 
 suivi_ap <- data.table(suivi_ap)
 ### Filtre dates incohérentes (> à observation de l'autre)
-DT_SITU_PENAL_MAX <- max(suivi_ap$DT_FIN_ELIG, na.rm = T) #max de la situation pénale
-DT_SITU_PENIT_MAX <- max(suivi_ap$DT_DBT_AP, na.rm = T) #max de la situ penit
-DT_MAX <- pmin(DT_SITU_PENIT_MAX,DT_SITU_PENALE_MAX) # la plus petite des deux
-suivi_ap <- suivi_ap[DT_FIN_ELIG <= DT_MAX & 
-                       (is.na(DT_DBT_AP) | DT_DBT_AP <= DT_MAX), ] #on retire les infos post
+dt_situ_penal_max <- max(suivi_ap$dt_fin_elig, na.rm = t) #max de la situation pénale
+dt_situ_penit_max <- max(suivi_ap$dt_dbt_ap, na.rm = t) #max de la situ penit
+dt_max <- pmin(dt_situ_penit_max,dt_situ_penale_max) # la plus petite des deux
+suivi_ap <- suivi_ap[dt_fin_elig <= dt_max & 
+                       (is.na(dt_dbt_ap) | dt_dbt_ap <= dt_max), ] #on retire les infos post
 
-## 5.2 LC ------
+## 5.2 lc ------
 ### 5.2.1 avec les levées d'écrou (modif aménagement et date) ------
 suivi_ap <- suivi_ap[, `:=`(
-  AMENAGEMENT = fcase(
-    is.na(AMENAGEMENT) & LEVEECR_LC == 1, "LC", 
-    !is.na(AMENAGEMENT), AMENAGEMENT,
+  amenagement = fcase(
+    is.na(amenagement) & leveecr_lc == 1, "LC", 
+    !is.na(amenagement), amenagement,
     default = "Non_AP")
 )]
 ## modif date
-suivi_ap <- suivi_ap[AMENAGEMENT == "LC", `:=`(
-  DT_DBT_AP = DT_LEVEECR,
-  DT_FIN_AP = DT_FIN_PEINE
+suivi_ap <- suivi_ap[amenagement == "LC", `:=`(
+  dt_dbt_ap = dt_leveecr,
+  dt_fin_ap = dt_fin_peine
   )]
 ## crée une variable générale
 suivi_ap <- suivi_ap[, `:=`(
-  AP = fifelse(AMENAGEMENT == "Non_AP",0,1)
+  ap = fifelse(amenagement == "Non_AP",0,1)
 )]
 
 ### 5.2.2. dans les mesures -----
@@ -502,15 +517,15 @@ suivi_ap <- suivi_ap[, `:=`(
 ## 5.3 Export -----
 ### 5.3.1 Aménagement a la mise sous écrou + filtre ----
 suivi_ap <- suivi_ap[, `:=`(
-  AMENAGEMENT_MSE = fifelse(DT_DBT_AP <=  DT_ECROU_INITIAL + days(7) & !is.na(DT_DBT_AP), 1, 0),
-  DT_LIBE_PREV = NULL,
-  CD_MOTIF_MOUVEMENT = NULL,
-  DT_LEVEECR = NULL,
-  LEVEECR_LC = NULL 
+  amenagement_mse = fifelse(dt_dbt_ap <=  dt_ecrou_initial + days(7) & !is.na(dt_dbt_ap), 1, 0),
+  dt_libe_prev = NULL,
+  cd_motif_mouvement = NULL,
+  dt_leveecr = NULL,
+  leveecr_lc = NULL 
 )]
-### 5.3.2. Parquet
-setindexv(suivi_ap,c("NM_ECROU_INIT")) ### Crée index
-setorder(suivi_ap, NM_ECROU_INIT, DT_DBT_ELIG, DT_DBT_AP) ### Ordonne
+### 5.3.2. parquet
+setindexv(suivi_ap,c("nm_ecrou_init")) ### crée index
+setorder(suivi_ap, nm_ecrou_init, dt_dbt_elig, dt_dbt_ap) ### Ordonne
 write_parquet(suivi_ap,
               paste0(path,"Export/suivi_ap.parquet"),
               compression = "zstd")
