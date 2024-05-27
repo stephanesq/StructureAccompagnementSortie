@@ -48,26 +48,30 @@ path_ref = "~/Documents/Recherche/3_Evaluation/_DATA/Referentiel/"
 #   1. Quelle est la date de lib prev quand on est prévenu ?
 #   2. Pourquoi des cas comme 1015280006347
 
-colselect <- toupper(c("nm_ecrou_init", "dt_debut_situ_penale", "dt_fin_situ_penale", 
-                       "cd_cp_globale", "cd_cp_glo_man", "cd_cp_detail", "dt_libe_prev", 
-                       "qtm_ferme_tacc_a", "qtm_ferme_tacc_m", "qtm_ferme_tacc_s", "qtm_ferme_tacc_j"))
+colselect <- c("nm_ecrou_init", "dt_debut_situ_penale", "dt_fin_situ_penale", 
+               "cd_cp_globale", "cd_cp_glo_man", "cd_cp_detail", "dt_libe_prev", 
+               "qtm_ferme_tacc_a", "qtm_ferme_tacc_m", "qtm_ferme_tacc_s", "qtm_ferme_tacc_j")
 
 t_dwh_h_situ_penale <- open_dataset(paste0(path_dwh,"t_dwh_h_situ_penale.parquet"))  |>
-  # Définir la requête
-    # Filtre et selection
-  filter(TP_SOURCE == "GENESIS") |>
-    select(colselect) |>
+  rename_with(tolower) |> #passage en lower case
+  # Filtre et selection
+  filter(tp_source == "GENESIS") |>
+  select(all_of(colselect)) |> #plutôt que select, deprecated pour des sélections avec listes de vecteurs
     collect() |>
   janitor::clean_names() |> 
   
   # changement des formats
   mutate(
     across(starts_with("dt_"), as.Date),
-    across(starts_with("qtm_"), as.numeric)
+    across(starts_with("qtm_"), as.numeric),
+    across(where(is.character), ~ if_else( . %in% c("NA","(ND)","(NF)","(NR)"), NA, .))
     ) |>
     # quantum ferme
     mutate(qtm_ferme_tacc = qtm_ferme_tacc_a * 360 + qtm_ferme_tacc_m * 30 + qtm_ferme_tacc_s * 7 + qtm_ferme_tacc_j) |>
     select(-qtm_ferme_tacc_a, -qtm_ferme_tacc_m, -qtm_ferme_tacc_s, -qtm_ferme_tacc_j)  
+
+## date max 
+dt_situ_penale_max <- max(t_dwh_h_situ_penale$dt_debut_situ_penale)
 
 ## passage en data.table
 t_dwh_h_situ_penale = data.table(t_dwh_h_situ_penale)
@@ -89,14 +93,17 @@ t_dwh_h_situ_penale[, `:=`(
   first_situ = NULL)]
 
 # on garde que ligne exploitable (situ < lib_prev et lib_prev dispo)
-t_dwh_h_situ_penale <- t_dwh_h_situ_penale[dt_situ_penale <= dt_libe_prev & !is.na(dt_libe_prev),]
+t_dwh_h_situ_penale <- t_dwh_h_situ_penale[dt_situ_penale <= dt_libe_prev & 
+                                             !is.na(dt_libe_prev),
+                                           ][dt_situ_penale < dt_situ_penale_max,]
+                                                                                                  
 
-  # catégorie pénale (à partir de la seule situ_penale)
+# catégorie pénale (à partir de la seule situ_penale)
 t_dwh_h_situ_penale[, 
                     cd_cp_redr := as.factor(
                       fcase(
-                        !cd_cp_globale %in% c('(nd)', '-', ''), as.character(cd_cp_globale),
-                        !cd_cp_glo_man %in% c('(ND)', '-', ''), as.character(cd_cp_glo_man),
+                        !is.na(cd_cp_globale), as.character(cd_cp_globale),
+                        !is.na(cd_cp_glo_man), as.character(cd_cp_glo_man),
                         cd_cp_detail %in% c("PR", "PRE", "PRV", "APP", "DAP", "DPO", "OPP", "POU"),  "PR",
                         default = "CO")) ] 
 # on enlève les dates inutiles
@@ -106,8 +113,7 @@ t_dwh_h_situ_penale[, `:=`(
   cd_cp_detail = NULL)]
 
 gc()
-## date max 
-dt_situ_penale_max <- max(t_dwh_h_situ_penale$dt_situ_penale)
+
 
 
 ## 1.2. date d'écrou initial  ------
@@ -121,32 +127,39 @@ t_dwh_ecrou_init <- t_dwh_ecrou_init %>%
   distinct() 
 
 ## 1.3 Date de libération ----
-
-t_dwh_f_mouvement <- open_dataset(paste0(path_dwh,"t_dwh_f_mouvement.parquet"))
-
-t_dwh_f_mouvement <- t_dwh_f_mouvement|>
-  filter(tp_source ==  "GENESIS") |>
-  filter(cd_type_mouvement == "LIB" & cd_nature_mouvement == "LEVECR") |>
+# dernière libération et motif 
+t_dwh_f_mouvement <- open_dataset(paste0(path_dwh,"t_dwh_f_mouvement.parquet")) |> 
+  rename_with(tolower) |> #passage en lower case
+  filter(tp_source ==  "GENESIS") |> #garde que info vue GENESIS
+  filter(cd_type_mouvement == "LIB" & cd_nature_mouvement == "LEVECR") |> # libération
   select(nm_ecrou_init, dt_mouvement_reel,cd_motif_mouvement) |>
-  collect() |>
+  collect()
+        
+## passage en data.table
+t_dwh_f_mouvement = data.table(t_dwh_f_mouvement)
+setkey(t_dwh_f_mouvement,nm_ecrou_init)
 
-  group_by(nm_ecrou_init) |>
-  mutate(dt_leveecr = max(dt_mouvement_reel)) |>
-  ungroup()  |>
-  filter(dt_leveecr==dt_mouvement_reel) |> 
-  mutate(dt_leveecr=as.Date(dt_leveecr),
-         leveecr_lc=if_else(str_detect(cd_motif_mouvement, "^LC") & cd_motif_mouvement != 'LCTRT',1,0)) |>
-  select(-dt_mouvement_reel)
+#Dernière lib par nm_ecrou et flag LC  
+t_dwh_f_mouvement[,
+                  dt_leveecr := max(dt_mouvement_reel), #recupere la dernière date de libération
+                  .(nm_ecrou_init)][,`:=`(
+                    dt_leveecr = as.Date(dt_leveecr),
+                    leveecr_lc = fifelse(str_detect(cd_motif_mouvement, "^LC") & cd_motif_mouvement != 'LCTRT',1,0) #indic LC
+                  )]
+t_dwh_f_mouvement <- t_dwh_f_mouvement[dt_leveecr == as.Date(dt_mouvement_reel) &
+                                         dt_leveecr < dt_situ_penale_max,
+                                       ][,
+                                       dt_mouvement_reel := NULL]
 
 gc()
 
 #2. croiser information  ----
 
 ##2.1 levée écrou et lc --------------
-h_situ_penale <- t_dwh_h_situ_penale %>% 
-  left_join(t_dwh_f_mouvement) 
+h_situ_penale <- merge(t_dwh_h_situ_penale,t_dwh_f_mouvement) 
 # nettoyage
 rm(t_dwh_f_mouvement,t_dwh_h_situ_penale)
+
 ##2.2. ecrou init / elibilite lsc --------------
 # passage en data.table
 # eligibilité en comparant date de mise à l'écrou et date de lib prev
@@ -160,8 +173,21 @@ setkey(t_dwh_ecrou_init,nm_ecrou_init)
 
 # inner join avec date écrou initial nomatch=0 -> autre possibilité merge() de data.table
 h_situ_penale <- h_situ_penale[t_dwh_ecrou_init, nomatch = 0]
+
+
+##2.3. Export intermédiaire ------
+setindexv(h_situ_penale,c("nm_ecrou_init")) ### Crée index
+setorder(h_situ_penale, nm_ecrou_init) ### Ordonne
+write_parquet(h_situ_penale,
+              paste0(path,"Export/h_situ_penale.parquet"),
+              compression = "zstd")
+
 # nettoyage
 rm(t_dwh_ecrou_init)
+
+##2.4. Calcul ensemble des dates ------
+
+h_situ_penale <- read_parquet(paste0(path,"Export/h_situ_penale.parquet"))
 
 # calcul 2/3 de peine + date de fin de peine
 h_situ_penale[, `:=`(
@@ -175,12 +201,11 @@ h_situ_penale[, `:=`(
 )]
 
 # récupére prochaine situ pénale (shift) ou date lib prev si absente (fcoalesce)
-h_situ_penale <- h_situ_penale[order(nm_ecrou_init, dt_situ_penale)]
-h_situ_penale[, `:=`(
-  dt_next_situ_penale = fcoalesce(
+setorder(h_situ_penale,nm_ecrou_init, dt_situ_penale)
+h_situ_penale[, 
+  dt_next_situ_penale := fcoalesce(
     shift(dt_situ_penale, type = "lead"),
-    dt_fin_peine)
-  ), 
+    dt_fin_peine), 
   by = nm_ecrou_init]
 
 # calcul éligibilité
@@ -189,16 +214,16 @@ h_situ_penale[, `:=`(
       qtm_ferme_tacc > 0 &
         qtm_ferme_tacc/360 <= 5 & 
         dt_deux_ans_avt <= dt_next_situ_penale
-    , 1l, 0l),
+    , 1L, 0L),
   eligible_lsc = fifelse(
     qtm_ferme_tacc > 0 &
       qtm_ferme_tacc/360 <= 5 & 
       dt_deux_ans_avt <= dt_next_situ_penale
-    , 1l, 0l),
+    , 1L, 0L),
   eligible_lscd = fifelse(
     qtm_ferme_tacc > 0 &
       qtm_ferme_tacc/360 <= 2 & 
-      dt_trois_mois_avt <= dt_next_situ_penale ,1l, 0l) #les parties 1l et 0l correspondent à des entiers littéraux en r, pour éviter que r croit à des décimaux ou autres
+      dt_trois_mois_avt <= dt_next_situ_penale ,1L, 0L) #les parties 1L et 0L correspondent à des entiers littéraux en r, pour éviter que r croit à des décimaux ou autres
   )]
 
 
@@ -333,7 +358,7 @@ h_situ_penit <- h_situ_penit[order(nm_ecrou_init, dt_debut_situ_penit)]
 h_situ_penit[ , dt_situ_penit := 
                 as.Date(
                   shift(dt_fin_situ_penit, 
-                        fill=dt_debut_situ_penit[1l], 
+                        fill=dt_debut_situ_penit[1L], 
                         n=1, 
                         type="lag")
                 )
