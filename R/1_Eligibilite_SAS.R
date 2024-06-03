@@ -146,8 +146,8 @@ t_dwh_f_mouvement[,
                     dt_leveecr = as.Date(dt_leveecr),
                     leveecr_lc = fifelse(str_detect(cd_motif_mouvement, "^LC") & cd_motif_mouvement != 'LCTRT',1,0) #indic LC
                   )]
-t_dwh_f_mouvement <- t_dwh_f_mouvement[dt_leveecr == as.Date(dt_mouvement_reel) &
-                                         dt_leveecr < dt_situ_penale_max,
+t_dwh_f_mouvement <- t_dwh_f_mouvement[dt_leveecr == as.Date(dt_mouvement_reel) & #conserve que dernière levée d'écrou
+                                         dt_leveecr <= dt_situ_penale_max, #pas de mouvement postérieur à date situ penal max
                                        ][,
                                        dt_mouvement_reel := NULL]
 
@@ -186,10 +186,14 @@ write_parquet(h_situ_penale,
 rm(t_dwh_ecrou_init)
 
 ##2.4. Calcul ensemble des dates ------
+##i. dates nécessaires à idenfitifier les périodes d'éligibilité
+##ii. pas de date de situation pénale postérieure à la 
 
 h_situ_penale <- read_parquet(paste0(path,"Export/h_situ_penale.parquet"))
 
-# calcul 2/3 de peine + date de fin de peine
+h_situ_penale <- data.table(h_situ_penale)
+
+#i. calcul 2/3 de peine + date de fin de peine
 h_situ_penale[, `:=`(
   dt_deuxtiersdepeine = floor_date(
     time_length(difftime(dt_libe_prev, dt_ecrou_initial), "days") * 2/3 + dt_ecrou_initial,
@@ -199,6 +203,10 @@ h_situ_penale[, `:=`(
   dt_trois_mois_avt = dt_libe_prev - months(3),
   dt_fin_peine = if_else(leveecr_lc == 1, dt_libe_prev,dt_leveecr) #date de libération prévisionnelle si sortie pour lc sinon 
 )]
+
+#ii. dt_fin_peine :
+h_situ_penale[dt_fin_peine < dt_situ_penale, 
+              dt_situ_penale := dt_fin_peine ]
 
 # récupére prochaine situ pénale (shift) ou date lib prev si absente (fcoalesce)
 setorder(h_situ_penale,nm_ecrou_init, dt_situ_penale)
@@ -247,44 +255,49 @@ eligible_ap[, `:=`(
   dt_fin_elig = last(dt_next_situ_penale))
             , by=.(nm_ecrou_init,group)]
 ### garde qu'une ligne
-eligible_ap <- eligible_ap[, .sd[1], by=.(nm_ecrou_init,group)] # extract first row of groups.
+eligible_ap <- eligible_ap[, .SD[1], by=.(nm_ecrou_init,group)] # extract first row of groups.
 ### créé un compteur d'éligibilité
-eligible_ap <- eligible_ap[ ,  `:=`( 
-  group = seq(.n),
-  nb_group = .n,
-  annee_dbt_elig_ap = year(dt_dbt_elig))
-  , by = .(nm_ecrou_init)]
+eligible_ap[ ,  
+             `:=`( 
+               group = seq(.N),
+               nb_group = .N,
+               annee_dbt_elig_ap = year(dt_dbt_elig)),
+             .(nm_ecrou_init)
+             ]
 # table(eligible_ap$group)
-# 1      2 
-# 660756      1
+# 1      2      3      4 
+# 609350     74      8      2 
 ### qu'écrou avec un seul spell d'éligibilité
 eligible_ap <- eligible_ap[nb_group == 1, ]
 ### enleve les colonnes inutiles
-eligible_ap <- eligible_ap[, `:=`(
-  group = NULL,
-  nb_group = NULL,
-  dt_situ_penale = NULL,
-  dt_next_situ_penale = NULL,
-  eligible_ap = NULL
-)]
+eligible_ap[, 
+            `:=`(
+              group = NULL,
+              nb_group = NULL,
+              dt_situ_penale = NULL,
+              dt_next_situ_penale = NULL,
+              eligible_ap = NULL
+            )]
 # nettoyage
 rm(h_situ_penale)
 ## 3.2 elig lsc(-d) ------
 ## pour lsc, dépend uniquement de l'éligibilité et de la date
 ## pour lsc-d, manque d'autres infos, pas dispo à ce stade
-eligible_ap <- eligible_ap[, `:=`(
-  dt_dbt_elig_lsc = fifelse(
-    eligible_lsc == 1 & dt_deuxtiersdepeine <= dt_fin_elig, 
-    pmax(dt_deuxtiersdepeine, dt_dbt_elig), # pour éviter de prendre une date avant le début de l'éligibilité à l'ap
-    NA_date_), #vide sinon
-  dt_dbt_elig_lscd = fifelse(
-    eligible_lscd == 1 & dt_trois_mois_avt <= dt_fin_elig, 
-    pmax(dt_trois_mois_avt, dt_dbt_elig), 
-    NA_date_),
-  dt_deuxtiersdepeine = NULL,
-  dt_trois_mois_avt = NULL,
-  eligible_lsc = NULL,
-  eligible_lscd = NULL
+eligible_ap[, 
+            `:=`(
+              dt_dbt_elig_lsc = 
+                fifelse(
+                  eligible_lsc == 1 & dt_deuxtiersdepeine <= dt_fin_elig, 
+                  pmax(dt_deuxtiersdepeine, dt_dbt_elig), # pour éviter de prendre une date avant le début de l'éligibilité à l'ap
+                  NA), #vide sinon
+              dt_dbt_elig_lscd = fifelse(
+                eligible_lscd == 1 & dt_trois_mois_avt <= dt_fin_elig, 
+                pmax(dt_trois_mois_avt, dt_dbt_elig), 
+                NA),
+              dt_deuxtiersdepeine = NULL,
+              dt_trois_mois_avt = NULL,
+              eligible_lsc = NULL,
+              eligible_lscd = NULL
 )]
 ## 3.3 Filtre et export -----
 ## Filtres : 
@@ -464,7 +477,7 @@ situ_penit_ap[, `:=`(
   dt_fin_ap= last(dt_next_situ_penit))
   , by=.(nm_ecrou_init,group)]
 ### garde qu'une ligne
-situ_penit_ap <- situ_penit_ap[, .sd[1], by=.(nm_ecrou_init,group)] # extract first row of groups.
+situ_penit_ap <- situ_penit_ap[, .SD[1], by=.(nm_ecrou_init,group)] # extract first row of groups.
 ### créé un compteur d'éligibilité
 situ_penit_ap <- situ_penit_ap[ ,  `:=`( 
   group = seq(.N),
