@@ -321,19 +321,20 @@ write_parquet(eligible_ap,
 ## 4.1 Import -----
 ## Redressement avec les règles de gestion
 t_dwh_h_situ_penit <- open_dataset(paste0(path_dwh,"t_dwh_h_situ_penit.parquet")) |> 
+  rename_with(tolower) |> #passage en lower case
   filter(top_ecroue == 1) |>  
+  select(nm_ecrou_init,
+         dt_debut_situ_penit,dt_fin_situ_penit,
+         cd_motif_hebergement,top_heberge,cd_statut_semi_liberte, cd_categ_admin,
+         top_lsc, cd_type_amenagement, cd_amenagement_peine, 
+         dt_debut_exec,dt_suspsl, 
+         id_ugc_ref) |>
   collect()
 
 t_dwh_h_situ_penit <- t_dwh_h_situ_penit |> 
-  select(nm_ecrou_init,
-       dt_debut_situ_penit,dt_fin_situ_penit,
-       cd_motif_hebergement,top_heberge,cd_statut_semi_liberte, cd_categ_admin,
-       top_lsc, cd_type_amenagement, cd_amenagement_peine, 
-       dt_debut_exec,dt_suspsl, 
-       id_ugc_ref) |>
   # redressement aménagement de peine
   mutate(top_detention = if_else(cd_motif_hebergement %in% c('PE','PSEM','PSE','SEFIP','DDSE'),0,1),    
-         AMENAGEMENT = case_when(
+         amenagement = case_when(
            top_detention==0 & cd_motif_hebergement %in% c('PSE', 'PSEM', 'SEFIP') ~ "DDSE", #PSE
            top_detention==0 & cd_motif_hebergement == 'DDSE'  ~ "DDSE",
            top_detention==0 & cd_motif_hebergement == "PE" ~ "PE_nheb",
@@ -347,8 +348,8 @@ t_dwh_h_situ_penit <- t_dwh_h_situ_penit |>
          )) %>% 
   # Pas possible de filtrer maintenant à cause des problèmes de décalage de date des début de situ penit
   # filter(!is.na(AMENAGEMENT)) |> 
-  select(-top_detention, -cd_motif_hebergement, -cd_type_amenagement, -cd_amenagement_peine,-cd_statut_semi_liberte,-cd_categ_admin,-top_heberge) |>
-  collect() 
+  select(-top_detention, -cd_motif_hebergement, -cd_type_amenagement, -cd_amenagement_peine,-cd_statut_semi_liberte,-cd_categ_admin,-top_heberge)
+
 # table(T_DWH_H_SITU_PENIT$TOP_ECROUE,T_DWH_H_SITU_PENIT$TOP_SORTIE_DEF)
 
 ## 4.2 Modification ------
@@ -358,8 +359,10 @@ h_situ_penit <- open_dataset(paste0(path,"Export/eligible_ap.parquet")) |>
   collect() |> 
     inner_join(t_dwh_h_situ_penit) |> 
     distinct() 
+
 ## enlève t_dwh
 rm(t_dwh_h_situ_penit)
+
 ### passage en data.table
 h_situ_penit <- data.table(h_situ_penit)
 setkey(h_situ_penit,nm_ecrou_init)
@@ -367,7 +370,7 @@ setkey(h_situ_penit,nm_ecrou_init)
 ### 4.2.2. changement organisation table (data.table) -----
 # décalage puis que aménagement et que bonne date
 # fill using first : https://rdatatable.gitlab.io/data.table/reference/shift.html
-h_situ_penit <- h_situ_penit[order(nm_ecrou_init, dt_debut_situ_penit)]
+setorder(h_situ_penit, nm_ecrou_init, dt_debut_situ_penit)
 h_situ_penit[ , dt_situ_penit := 
                 as.Date(
                   shift(dt_fin_situ_penit, 
@@ -377,7 +380,7 @@ h_situ_penit[ , dt_situ_penit :=
                 )
             , by=nm_ecrou_init]
 # supprime les intervalles
-h_situ_penit <- h_situ_penit[,`:=`(
+h_situ_penit[,`:=`(
   dt_debut_situ_penit=NULL,
   dt_fin_situ_penit=NULL,
   dt_debut_exec = as.Date(dt_debut_exec),
@@ -388,7 +391,7 @@ h_situ_penit <- unique(h_situ_penit)
 h_situ_penit <- h_situ_penit[order(nm_ecrou_init, dt_situ_penit)]
 # identifier les périodes avec aménagement
 # utiliser les dt_debut_exec et les dt_suspsl pour modifier ces périodes
-h_situ_penit <- h_situ_penit[,`:=`(
+h_situ_penit[,`:=`(
   dt_situ_penit = fifelse(
     !is.na(dt_debut_exec) & !is.na(amenagement) & #date et aménagement renseigné
       dt_debut_exec>dt_situ_penit & 
@@ -408,8 +411,8 @@ h_situ_penit <- h_situ_penit[,`:=`(
     , amenagement
     ))]
 # pareil avec suspension 
-h_situ_penit <- h_situ_penit[,`:=`(
-  Dt_situ_penit = fifelse(
+h_situ_penit[,`:=`(
+  dt_situ_penit = fifelse(
     !is.na(dt_suspsl) & !is.na(amenagement) & year(dt_suspsl)>1900 & #date et aménagement renseigné
       dt_suspsl>=dt_situ_penit & (
         dt_suspsl <= shift(dt_situ_penit, n=1, type="lead") | 
@@ -430,26 +433,31 @@ h_situ_penit <- h_situ_penit[,`:=`(
   indic_amenagement = fifelse(is.na(amenagement),0,1)
   )]
 # supprime les intervalles
-h_situ_penit <- h_situ_penit[,`:=`(
+h_situ_penit[,`:=`(
   dt_debut_exec=NULL,
   dt_suspsl=NULL
 )]
+
 ## 4.3 Phase d'AP ------
 ### 4.3.1 Date suivante ou levée d'écrou ------
 # libération -> data.table
 f_levecr <- open_dataset(paste0(path_dwh,"t_dwh_f_mouvement.parquet")) |>
+  rename_with(tolower) |> #passage en lower case
   filter(tp_source ==  "GENESIS") |>
   filter(cd_type_mouvement == "LIB" & cd_nature_mouvement == "LEVECR") |>
   select(nm_ecrou_init, dt_mouvement_reel) |>
     group_by(nm_ecrou_init) |>
     summarise(dt_leveecr = max(dt_mouvement_reel)) |>
   collect() 
+
 ### passage en data.table
 f_levecr <- data.table(f_levecr)
 setkey(f_levecr,nm_ecrou_init)  
+
 ### récupérer l'info puis supprile
 h_situ_penit <- merge(h_situ_penit,f_levecr)
 rm(f_levecr)
+
 # date suivante/levée d'écrou pour la penit -> afin d'avoir une date de fin si besoin
 h_situ_penit[, `:=`(
   dt_next_situ_penit = fcoalesce(
@@ -457,7 +465,15 @@ h_situ_penit[, `:=`(
     as.Date(dt_leveecr))
 ), by = nm_ecrou_init]
 gc()
-### 4.2.3. phase d'ap ------
+
+## export
+setindexv(h_situ_penit,c("nm_ecrou_init")) ### Crée index
+setorder(h_situ_penit, nm_ecrou_init, dt_situ_penit) ### Ordonne
+write_parquet(h_situ_penit,
+              paste0(path,"Export/h_situ_penit.parquet"),
+              compression = "zstd")
+
+### 4.3.2. phase d'ap ------
 ## période d'éligibilité à un aménagement de peine (unique par nm_ecrou_init)
 ### créer une colonne pour les groupes consécutifs de elig == 1 (séparés par des lignes elig =0)
 ### cumsum(elig==0) crée un groupe cumulatif (1, 1, 2, 2, 2, 2, 1, 2, 2, 2, 2) basé sur les indices où elig est égal à 0
