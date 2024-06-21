@@ -74,3 +74,6 @@ Documentation/*
 .DS_Store
 *.xls
 *.jpeg
+_archive_commande_SAS/test_ap_debats_contrad.sas
+_archive_commande_SAS/SAS_IP1.url
+_archive_commande_SAS/2306_014.Rproj
